@@ -1,5 +1,6 @@
 package forge.adventure.data;
 
+import forge.Forge;
 import forge.adventure.util.CardUtil;
 import forge.adventure.util.Config;
 import forge.adventure.util.Current;
@@ -22,6 +23,7 @@ import java.util.Arrays;
 public class EnemyData implements Serializable {
     private static final long serialVersionUID = -3317270785183936320L;
     public String name;
+    public String locName;         //References a localized string for the name.
     public String nameOverride;
     public String sprite;
     public String[] deck;
@@ -46,13 +48,16 @@ public class EnemyData implements Serializable {
     public float lifetime;
     public int gamesPerMatch = 1;
     public String bossInsult;
+    public String locBossInsult; //References a localized string for the boss insult.
     public String bossIntro;
+    public String locBossIntro;  //References a localized string for the boss intro.
 
     public EnemyData() {
     }
 
     public EnemyData(EnemyData enemyData) {
         name            = enemyData.name;
+        locName         = enemyData.locName;
         sprite          = enemyData.sprite;
         deck            = enemyData.deck;
         ai              = enemyData.ai;
@@ -69,7 +74,9 @@ public class EnemyData implements Serializable {
         colors          = enemyData.colors;
         teamNumber      = enemyData.teamNumber;
         bossInsult      = enemyData.bossInsult;
+        locBossInsult   = enemyData.locBossInsult;
         bossIntro       = enemyData.bossIntro;
+        locBossIntro    = enemyData.locBossIntro;
         nextEnemy       = enemyData.nextEnemy == null ? null : new EnemyData(enemyData.nextEnemy);
         nameOverride    = enemyData.nameOverride == null ? "" : enemyData.nameOverride;
         questTags       = enemyData.questTags.clone();
@@ -112,14 +119,14 @@ public class EnemyData implements Serializable {
         if (nameOverride != null && !nameOverride.isEmpty())
             return nameOverride;
         if (name != null && !name.isEmpty())
-            return name;
+            return Forge.getLocalizer().getMessageorUseDefault(locName, name);
         return "(Unnamed Enemy)";
     }
     public String getBossInsult(){
-        return bossInsult;
+        return Forge.getLocalizer().getMessageorUseDefault(locBossInsult, bossInsult);
     }
     public String getBossIntro(){
-        return bossIntro;
+        return Forge.getLocalizer().getMessageorUseDefault(locBossIntro, bossIntro);
     }
 
     public boolean match(EnemyData other) {

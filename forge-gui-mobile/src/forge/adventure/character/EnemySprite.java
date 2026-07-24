@@ -443,10 +443,10 @@ public class EnemySprite extends CharacterSprite implements Steerable<Vector2> {
         return nameOverride;
     }
     public String getBossInsult(){
-        return data.bossInsult;
+        return data.getBossInsult();
     }
     public String getBossIntro(){
-        return data.bossIntro;
+        return data.getBossIntro();
     }
     public Array<Reward> getRewards() {
         Array<Reward> rewards = new Array<>();

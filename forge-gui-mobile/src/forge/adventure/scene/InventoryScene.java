@@ -308,7 +308,7 @@ public class InventoryScene extends UIScene {
                             this.triggerUse();
                             removeDialog();
                         }, this::removeDialog);
-                useDialog.getContentTable().add(Controls.newTextraLabel("Use " + data.name + "?\n" + data.getDescription()));
+                useDialog.getContentTable().add(Controls.newTextraLabel("Use " + data.getName() + "?\n" + data.getDescription()));
             }
             showDialog(useDialog);
         }
@@ -369,7 +369,7 @@ public class InventoryScene extends UIScene {
             }
             repairButton.setVisible(data.isCracked);
             String status = data.isCracked ? " (" + Forge.getLocalizer().getMessage("lblCracked") + ")" : "";
-            itemDescription.setText(data.name + status + "\n[%98]" + data.getDescription());
+            itemDescription.setText(data.getName() + status + "\n[%98]" + data.getDescription());
         }
         else if (deckLocation.containsKey(actor)){
             Deck data = (deckLocation.get(actor));

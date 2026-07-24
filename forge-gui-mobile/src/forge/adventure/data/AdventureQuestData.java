@@ -2,6 +2,7 @@ package forge.adventure.data;
 
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Array;
+import forge.Forge;
 import forge.adventure.character.EnemySprite;
 import forge.adventure.pointofintrest.PointOfInterest;
 import forge.adventure.scene.GameScene;
@@ -31,7 +32,9 @@ public class AdventureQuestData implements Serializable {
     }
     public boolean isTemplate = false;
     public String name = "";
+    public String locName = "";        //References a localized string for the quest name.
     public String description = "";
+    public String locDescription = ""; //References a localized string for the quest description.
     public String synopsis =""; //Intended for Dev Mode only at most
     public transient boolean completed = false;
     public transient boolean failed = false;
@@ -64,10 +67,10 @@ public class AdventureQuestData implements Serializable {
     public String sourceID = "";
 
     public String getName() {
-        return name;
+        return Forge.getLocalizer().getMessageorUseDefault(locName, name);
     }
     public String getDescription() {
-        return description;
+        return Forge.getLocalizer().getMessageorUseDefault(locDescription, description);
     }
     public RewardData getReward() {
         return reward;
@@ -77,7 +80,9 @@ public class AdventureQuestData implements Serializable {
         id = data.id;
         isTemplate = false; //Anything being copied is by definition not a template
         name = data.name;
+        locName = data.locName;
         description = data.description;
+        locDescription = data.locDescription;
         synopsis = data.synopsis;
         offerDialog = new DialogData(data.offerDialog);
         prologue = new DialogData(data.prologue);
@@ -449,12 +454,12 @@ public class AdventureQuestData implements Serializable {
         }
         if (showNotification) {
             StringBuilder description = new StringBuilder();
-            description.append("[!]").append(name).append("[]");
+            description.append("[!]").append(getName()).append("[]");
             for (AdventureQuestStage stage : getActiveStages()) {
                 description.append("\n")
-                        .append(stage.name).append("\n[/]")
+                        .append(stage.getName()).append("\n[/]")
                         //.append(stage.description.length()<=50?stage.description:stage.description.substring(0,49) + "...")
-                        .append(stage.description)
+                        .append(stage.getDescription())
                         .append("[]");
             }
             GameHUD.getInstance().addNotification(description.toString());

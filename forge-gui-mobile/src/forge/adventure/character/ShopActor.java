@@ -49,11 +49,11 @@ public class ShopActor extends MapActor {
 
     @Override
     public String getName() {
-        return shopData.name;
+        return shopData.getName();
     }
 
     public String getDescription() {
-        return shopData.description;
+        return shopData.getDescription();
     }
 
     public int getRestockPrice() {

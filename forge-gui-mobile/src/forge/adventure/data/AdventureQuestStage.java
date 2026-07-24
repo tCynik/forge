@@ -1,5 +1,6 @@
 package forge.adventure.data;
 
+import forge.Forge;
 import forge.adventure.character.EnemySprite;
 import forge.adventure.pointofintrest.PointOfInterest;
 import forge.adventure.scene.TileMapScene;
@@ -24,7 +25,9 @@ public class AdventureQuestStage implements Serializable {
     public int id;
     private AdventureQuestController.QuestStatus status = INACTIVE;
     public String name = "";
+    public String locName = "";        //References a localized string for the stage name.
     public String description = "";
+    public String locDescription = ""; //References a localized string for the stage description.
     public boolean anyPOI = false; //false: Pick one PoI. True: Any PoI matching tags is usable
     public String mapFlag; //Map (or quest) flag to check
     public int mapFlagValue; //Minimum value for the flag
@@ -82,6 +85,14 @@ public class AdventureQuestStage implements Serializable {
 
     public AdventureQuestController.QuestStatus getStatus() {
         return status;
+    }
+
+    public String getName() {
+        return Forge.getLocalizer().getMessageorUseDefault(locName, name);
+    }
+
+    public String getDescription() {
+        return Forge.getLocalizer().getMessageorUseDefault(locDescription, description);
     }
 
     public PointOfInterest getTargetPOI() {
@@ -211,7 +222,9 @@ public class AdventureQuestStage implements Serializable {
         this.epilogue = new DialogData(other.epilogue);
         this.failureDialog = new DialogData(other.failureDialog);
         this.name = other.name;
+        this.locName = other.locName;
         this.description = other.description;
+        this.locDescription = other.locDescription;
         this.progress1 = other.progress1;
         this.progress2 = other.progress2;
         this.progress3 = other.progress3;

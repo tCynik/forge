@@ -174,7 +174,7 @@ public class QuestLogScene extends UIScene {
         detailScrollContainer.add(dDescriptionLabel).align(Align.left).padLeft(25).width(detailRoot.getWidth() -25);
 
         for (AdventureQuestStage stage : quest.getCompletedStages()) {
-            TypingLabel completeLabel = Controls.newTypingLabel("*  " + stage.name);
+            TypingLabel completeLabel = Controls.newTypingLabel("*  " + stage.getName());
             completeLabel.skipToTheEnd();
             completeLabel.setColor(Color.GREEN);
             completeLabel.setWrap(true);
@@ -183,14 +183,14 @@ public class QuestLogScene extends UIScene {
         }
 
         for (AdventureQuestStage stage : quest.getActiveStages()) {
-            TypingLabel activeLabel = Controls.newTypingLabel("*  " + stage.name);
+            TypingLabel activeLabel = Controls.newTypingLabel("*  " + stage.getName());
             activeLabel.skipToTheEnd();
             activeLabel.setColor(Color.BLACK);
             activeLabel.setWrap(true);
             detailScrollContainer.row();
             detailScrollContainer.add(activeLabel).align(Align.left).padLeft(25);
 
-            TypingLabel activeDescriptionLabel = Controls.newTypingLabel(stage.description);
+            TypingLabel activeDescriptionLabel = Controls.newTypingLabel(stage.getDescription());
             activeDescriptionLabel.skipToTheEnd();
             activeDescriptionLabel.setColor(Color.DARK_GRAY);
             activeDescriptionLabel.setWrap(true);

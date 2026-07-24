@@ -1,6 +1,7 @@
 package forge.adventure.data;
 
 import com.badlogic.gdx.graphics.g2d.Sprite;
+import forge.Forge;
 import forge.adventure.util.Config;
 
 import java.io.Serializable;
@@ -14,9 +15,11 @@ import java.util.UUID;
 public class ItemData implements Serializable, Cloneable {
     private static final long serialVersionUID = 1L;
     public String name;
+    public String locName;        //References a localized string for the item name.
     public String equipmentSlot;
     public EffectData effect;
     public String description; //Manual description of the item.
+    public String locDescription; //References a localized string for the description.
     public String iconName;
     public boolean questItem=false;
     public int cost=1000;
@@ -38,9 +41,11 @@ public class ItemData implements Serializable, Cloneable {
     public ItemData(ItemData cpy)
     {
         name              = cpy.name;
+        locName           = cpy.locName;
         equipmentSlot     = cpy.equipmentSlot;
         effect            = new EffectData(cpy.effect);
         description       = cpy.description;
+        locDescription    = cpy.locDescription;
         iconName          = cpy.iconName;
         questItem         = cpy.questItem;
         cost              = cpy.cost;
@@ -57,8 +62,9 @@ public class ItemData implements Serializable, Cloneable {
 
     public String getDescription() {
         String result = "";
-        if(this.description != null && !this.description.isEmpty())
-            result += description + "\n";
+        String desc = Forge.getLocalizer().getMessageorUseDefault(locDescription, description);
+        if(desc != null && !desc.isEmpty())
+            result += desc + "\n";
         if(this.equipmentSlot != null && !this.equipmentSlot.isEmpty())
             result += "Slot: " + this.equipmentSlot + "\n";
         if(effect != null)
@@ -69,7 +75,7 @@ public class ItemData implements Serializable, Cloneable {
     }
 
     public String getName() {
-        return name;
+        return Forge.getLocalizer().getMessageorUseDefault(locName, name);
     }
 
     @Override

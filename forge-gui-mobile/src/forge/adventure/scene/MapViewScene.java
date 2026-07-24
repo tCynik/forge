@@ -306,7 +306,7 @@ public class MapViewScene extends UIScene {
             if (poi != null) {
                 if (positions.contains(poi.getPosition()))
                     continue; //don't map duplicate position to prevent stacking
-                TypingLabel label = Controls.newTypingLabel("[+GPS][%?BLACKEN] " + adq.name);
+                TypingLabel label = Controls.newTypingLabel("[+GPS][%?BLACKEN] " + adq.getName());
                 labels.add(label);
                 table.addActor(label);
                 label.setPosition(getMapX(poi.getPosition().x) - label.getWidth() / 2, getMapY(poi.getPosition().y) - label.getHeight() / 2);

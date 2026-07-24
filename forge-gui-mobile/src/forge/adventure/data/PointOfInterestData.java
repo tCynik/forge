@@ -3,6 +3,7 @@ package forge.adventure.data;
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.Json;
+import forge.Forge;
 import forge.adventure.util.Config;
 import forge.adventure.util.Paths;
 
@@ -27,6 +28,7 @@ public class PointOfInterestData implements Serializable {
     public String[] questTags = new String[0];
     public DialogData.ActionData.QuestFlag[] questFlagsToActivate = new DialogData.ActionData.QuestFlag[0];
     public String displayName;
+    public String locDisplayName; //References a localized string for the displayName.
 
 
 
@@ -67,13 +69,12 @@ public class PointOfInterestData implements Serializable {
         active=other.active;
         questTags = other.questTags.clone();
         displayName= other.displayName;
+        locDisplayName = other.locDisplayName;
         questFlagsToActivate = other.questFlagsToActivate;
     }
 
     public String getDisplayName() {
-        if (displayName == null || displayName.isEmpty()) {
-            return name!=null?name:"";
-        }
-        return displayName;
+        String fallback = (displayName == null || displayName.isEmpty()) ? (name != null ? name : "") : displayName;
+        return Forge.getLocalizer().getMessageorUseDefault(locDisplayName, fallback);
     }
 }
