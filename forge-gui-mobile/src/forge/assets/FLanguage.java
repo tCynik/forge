@@ -2,6 +2,7 @@ package forge.assets;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
@@ -12,6 +13,12 @@ import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
 
 public class FLanguage {
+
+    //Matches exactly "xx-XX.properties" (e.g. "ru-RU.properties"), so files that merely live
+    //in the same directory without being a top-level UI language - e.g. per-world Adventure
+    //content bundles like "adventure-shandalar-ru-RU.properties" - aren't offered as a
+    //selectable language.
+    private static final Pattern LANGUAGE_FILE_PATTERN = Pattern.compile("^[a-z]{2}-[A-Z]{2}\\.properties$");
 
     public static void changeLanguage(final String languageName) {
         final ForgePreferences prefs = FModel.getPreferences();
@@ -33,7 +40,7 @@ public class FLanguage {
         final FileHandle dir = Gdx.files.absolute(ForgeConstants.LANG_DIR);
         for (FileHandle languageFile : dir.list()) {
             String languageName = languageFile.name();
-            if (!languageName.endsWith(".properties")) { continue; }
+            if (!LANGUAGE_FILE_PATTERN.matcher(languageName).matches()) { continue; }
             allLanguages.add(languageName.replace(".properties", ""));
         }
 

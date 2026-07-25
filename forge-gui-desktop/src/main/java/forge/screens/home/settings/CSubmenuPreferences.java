@@ -41,6 +41,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Controls the preferences submenu in the home UI.
@@ -386,6 +387,12 @@ public enum CSubmenuPreferences implements ICDoc {
         panel.setComboBox(comboBox, Singletons.getControl().getCloseAction());
     }
 
+    //Matches exactly "xx-XX.properties" (e.g. "ru-RU.properties"), so files that merely live
+    //in the same directory without being a top-level UI language - e.g. per-world Adventure
+    //content bundles like "adventure-shandalar-ru-RU.properties" - aren't offered as a
+    //selectable language.
+    private static final Pattern LANGUAGE_FILE_PATTERN = Pattern.compile("^[a-z]{2}-[A-Z]{2}\\.properties$");
+
     private void initializeDefaultLanguageComboBox() {
     	final File lang_root = new File(ForgeConstants.LANG_DIR);
     	final File[] files = lang_root.listFiles();
@@ -395,7 +402,7 @@ public enum CSubmenuPreferences implements ICDoc {
     			continue;
     		}
     		String languageName = file.getName();
-    		if (!languageName.endsWith(".properties")) {
+    		if (!LANGUAGE_FILE_PATTERN.matcher(languageName).matches()) {
     			continue;
     		}
     		allLanguages.add(languageName.replace(".properties", ""));
