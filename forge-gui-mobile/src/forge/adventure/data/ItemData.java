@@ -1,7 +1,6 @@
 package forge.adventure.data;
 
 import com.badlogic.gdx.graphics.g2d.Sprite;
-import forge.Forge;
 import forge.adventure.util.Config;
 
 import java.io.Serializable;
@@ -62,7 +61,7 @@ public class ItemData implements Serializable, Cloneable {
 
     public String getDescription() {
         String result = "";
-        String desc = Forge.getLocalizer().getMessageorUseDefault(locDescription, description);
+        String desc = Config.instance().getMessage(locDescription, description);
         if(desc != null && !desc.isEmpty())
             result += desc + "\n";
         if(this.equipmentSlot != null && !this.equipmentSlot.isEmpty())
@@ -75,7 +74,7 @@ public class ItemData implements Serializable, Cloneable {
     }
 
     public String getName() {
-        return Forge.getLocalizer().getMessageorUseDefault(locName, name);
+        return Config.instance().getMessage(locName, name);
     }
 
     @Override

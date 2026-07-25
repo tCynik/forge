@@ -2,7 +2,6 @@ package forge.adventure.data;
 
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Array;
-import forge.Forge;
 import forge.adventure.character.EnemySprite;
 import forge.adventure.pointofintrest.PointOfInterest;
 import forge.adventure.scene.GameScene;
@@ -11,6 +10,7 @@ import forge.adventure.stage.GameHUD;
 import forge.adventure.stage.MapStage;
 import forge.adventure.util.AdventureQuestController;
 import forge.adventure.util.AdventureQuestEvent;
+import forge.adventure.util.Config;
 import forge.adventure.util.Current;
 import forge.adventure.world.WorldSave;
 import forge.util.Aggregates;
@@ -67,10 +67,10 @@ public class AdventureQuestData implements Serializable {
     public String sourceID = "";
 
     public String getName() {
-        return Forge.getLocalizer().getMessageorUseDefault(locName, name);
+        return Config.instance().getMessage(locName, name);
     }
     public String getDescription() {
-        return Forge.getLocalizer().getMessageorUseDefault(locDescription, description);
+        return Config.instance().getMessage(locDescription, description);
     }
     public RewardData getReward() {
         return reward;

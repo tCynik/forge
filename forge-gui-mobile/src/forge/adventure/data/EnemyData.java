@@ -1,6 +1,5 @@
 package forge.adventure.data;
 
-import forge.Forge;
 import forge.adventure.util.CardUtil;
 import forge.adventure.util.Config;
 import forge.adventure.util.Current;
@@ -119,14 +118,14 @@ public class EnemyData implements Serializable {
         if (nameOverride != null && !nameOverride.isEmpty())
             return nameOverride;
         if (name != null && !name.isEmpty())
-            return Forge.getLocalizer().getMessageorUseDefault(locName, name);
+            return Config.instance().getMessage(locName, name);
         return "(Unnamed Enemy)";
     }
     public String getBossInsult(){
-        return Forge.getLocalizer().getMessageorUseDefault(locBossInsult, bossInsult);
+        return Config.instance().getMessage(locBossInsult, bossInsult);
     }
     public String getBossIntro(){
-        return Forge.getLocalizer().getMessageorUseDefault(locBossIntro, bossIntro);
+        return Config.instance().getMessage(locBossIntro, bossIntro);
     }
 
     public boolean match(EnemyData other) {

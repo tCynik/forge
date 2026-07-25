@@ -22,6 +22,16 @@ public class Localizer {
     private boolean silent = false;
     private boolean english = false;
 
+    //Optional additional bundles beyond the main UI one, e.g. one per Adventure-mode world,
+    //keyed by caller-chosen name. Each maps to "<name>-<languageRegionID>.properties" in the
+    //same languages directory as the main bundle. Absent for a given locale/name is normal
+    //(that content just isn't translated yet) - callers should always provide their own
+    //English default rather than relying on a fallback bundle here.
+    private String languageRegionID;
+    private String languagesDirectory;
+    private final Set<String> registeredBundleNames = new LinkedHashSet<>();
+    private final Map<String, ResourceBundle> additionalBundles = new HashMap<>();
+
     public static Localizer getInstance() {
         if (instance == null) {
             synchronized (Localizer.class) {
@@ -72,6 +82,53 @@ public class Localizer {
             return defaultValue;
         }
     }
+    /**
+     * Registers (or re-resolves, if the locale changed since) an additional properties
+     * bundle named "&lt;bundleName&gt;-&lt;current locale&gt;.properties" living in the same
+     * languages directory as the main UI bundle. Safe to call more than once for the same
+     * name (e.g. on every world load) - it's a no-op if already loaded for the current locale.
+     * Missing files for the current locale are expected (untranslated content) and silently
+     * leave that bundle absent, not an error.
+     */
+    public void registerBundle(final String bundleName) {
+        registeredBundleNames.add(bundleName);
+        loadAdditionalBundle(bundleName);
+    }
+
+    private void loadAdditionalBundle(final String bundleName) {
+        if (languagesDirectory == null || languageRegionID == null)
+            return;
+        try {
+            File file = new File(languagesDirectory);
+            URL[] urls = { file.toURI().toURL() };
+            ClassLoader loader = new URLClassLoader(urls);
+            ResourceBundle bundle = ResourceBundle.getBundle(bundleName + "-" + languageRegionID, locale, loader);
+            additionalBundles.put(bundleName, bundle);
+        } catch (MalformedURLException | NullPointerException | MissingResourceException e) {
+            additionalBundles.remove(bundleName);
+        }
+    }
+
+    /**
+     * Looks up a key in a previously-registered additional bundle (see {@link #registerBundle}).
+     * Always returns defaultValue - never an "INVALID PROPERTY" string - if the bundle isn't
+     * registered, the current locale has no file for it, or the key is missing: callers own the
+     * English fallback (typically the untranslated source content itself) rather than this class
+     * maintaining a parallel English copy of every additional bundle.
+     */
+    public String getMessageFromBundle(final String bundleName, final String key, final String defaultValue) {
+        if (english || key == null || key.isEmpty())
+            return defaultValue;
+        ResourceBundle bundle = additionalBundles.get(bundleName);
+        if (bundle == null)
+            return defaultValue;
+        try {
+            return bundle.getString(key);
+        } catch (MissingResourceException e) {
+            return defaultValue;
+        }
+    }
+
     public String getEnglishMessage(final String key, final Object... messageArguments) {
         return getMessage(true, key, messageArguments);
     }
@@ -168,6 +225,12 @@ public class Localizer {
             }
 
             System.out.println("Language '" + resourceBundle.getBaseBundleName() + "' loaded successfully.");
+
+            this.languageRegionID = languageRegionID;
+            this.languagesDirectory = languagesDirectory;
+            for (String bundleName : registeredBundleNames) {
+                loadAdditionalBundle(bundleName);
+            }
 
             notifyObservers();
         }

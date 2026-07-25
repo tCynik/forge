@@ -1,7 +1,7 @@
 package forge.adventure.data;
 
 import com.badlogic.gdx.utils.Array;
-import forge.Forge;
+import forge.adventure.util.Config;
 
 /**
  * Data class that will be used to read Json configuration files
@@ -22,11 +22,11 @@ public class ShopData {
     public String overlaySprite = "";
 
     public String getName() {
-        return Forge.getLocalizer().getMessageorUseDefault(locName, name);
+        return Config.instance().getMessage(locName, name);
     }
 
     public String getDescription() {
-        return Forge.getLocalizer().getMessageorUseDefault(locDescription, description);
+        return Config.instance().getMessage(locDescription, description);
     }
 
 

@@ -1,6 +1,5 @@
 package forge.adventure.data;
 
-import forge.Forge;
 import forge.adventure.character.EnemySprite;
 import forge.adventure.pointofintrest.PointOfInterest;
 import forge.adventure.scene.TileMapScene;
@@ -8,6 +7,7 @@ import forge.adventure.stage.MapStage;
 import forge.adventure.util.AdventureQuestController;
 import forge.adventure.util.AdventureQuestEvent;
 import forge.adventure.util.AdventureQuestEventType;
+import forge.adventure.util.Config;
 import forge.adventure.util.Current;
 import forge.util.Aggregates;
 
@@ -88,11 +88,11 @@ public class AdventureQuestStage implements Serializable {
     }
 
     public String getName() {
-        return Forge.getLocalizer().getMessageorUseDefault(locName, name);
+        return Config.instance().getMessage(locName, name);
     }
 
     public String getDescription() {
-        return Forge.getLocalizer().getMessageorUseDefault(locDescription, description);
+        return Config.instance().getMessage(locDescription, description);
     }
 
     public PointOfInterest getTargetPOI() {

@@ -30,7 +30,6 @@ import forge.adventure.world.WorldSave;
 import forge.card.ColorSet;
 import forge.localinstance.properties.ForgePreferences;
 import forge.model.FModel;
-import forge.util.Localizer;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.ArrayList;
@@ -156,7 +155,6 @@ public class MapDialog {
         }
 
         Dialog D = stage.getDialog();
-        Localizer L = Forge.getLocalizer();
         D.getTitleTable().clear();
         D.getContentTable().clear();
         D.getButtonTable().clear(); //Clear tables to start fresh.
@@ -167,7 +165,7 @@ public class MapDialog {
         if (actor instanceof CharacterSprite)
             sprite = ((CharacterSprite) actor).getAvatar();
         String text; //Check for localized string (locname), otherwise print text.
-        if (dialog.loctext != null && !dialog.loctext.isEmpty()) text = L.getMessageorUseDefault(dialog.loctext, dialog.text);
+        if (dialog.loctext != null && !dialog.loctext.isEmpty()) text = Config.instance().getMessage(dialog.loctext, dialog.text);
         else text = dialog.text;
         disposeAudio();
         if (dialog.voiceFile != null) {
@@ -228,7 +226,7 @@ public class MapDialog {
             for (DialogData option : dialog.options) {
                 if (isConditionOk(option.condition)) {
                     String name; //Get localized label if present.
-                    if (option.locname != null && !option.locname.isEmpty()) name = L.getMessageorUseDefault(option.locname, option.name);
+                    if (option.locname != null && !option.locname.isEmpty()) name = Config.instance().getMessage(option.locname, option.name);
                     else name = option.name;
                     TextraButton B;
                     if (option.isDisabled) {

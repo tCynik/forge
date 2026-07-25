@@ -45,6 +45,7 @@ public class Config {
     private SettingData settingsData;
     private String Lang = "en-us";
     private final String plane;
+    private final String adventureBundleName;
     private ObjectMap<String, ObjectMap<String, Sprite>> atlasSprites = new ObjectMap<>();
     private ObjectMap<PointOfInterestData, Array<Sprite>> poiSprites = new ObjectMap<>();
     private ObjectMap<String, ObjectMap<String, Array<Sprite>>> animatedSprites = new ObjectMap<>();
@@ -104,6 +105,13 @@ public class Config {
         //prefix = "forge-gui/res/adventure/Shandalar/";
         prefix = getPlanePath(settingsData.plane);
         commonPrefix = resPath() + "/res/adventure/" + commonDirectoryName + "/";
+
+        //One properties bundle per world (e.g. "adventure-shandalar-ru-RU.properties") keeps
+        //quest/item/enemy/etc. translations out of the shared UI ru-RU.properties, so
+        //translators working on different worlds don't collide in the same file.
+        adventureBundleName = plane != null ? "adventure-" + plane.toLowerCase().replace(" ", "_") : null;
+        if (adventureBundleName != null)
+            Forge.getLocalizer().registerBundle(adventureBundleName);
 
         currentConfig = this;
         if (FModel.getPreferences() != null)
@@ -193,6 +201,18 @@ public class Config {
     }
     public String getPrefix() {
         return prefix;
+    }
+
+    /**
+     * Resolves a locName/locText-style key against this world's own translation bundle
+     * (see {@link forge.util.Localizer#registerBundle}), falling back to defaultValue - the
+     * untranslated source text, normally - if the bundle, the current locale, or the key
+     * itself isn't available.
+     */
+    public String getMessage(String key, String defaultValue) {
+        if (adventureBundleName == null || key == null || key.isEmpty())
+            return defaultValue;
+        return Forge.getLocalizer().getMessageFromBundle(adventureBundleName, key, defaultValue);
     }
 
     public String getFilePath(String path) {

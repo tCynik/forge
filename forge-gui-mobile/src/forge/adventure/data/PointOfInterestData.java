@@ -3,7 +3,6 @@ package forge.adventure.data;
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.Json;
-import forge.Forge;
 import forge.adventure.util.Config;
 import forge.adventure.util.Paths;
 
@@ -75,6 +74,6 @@ public class PointOfInterestData implements Serializable {
 
     public String getDisplayName() {
         String fallback = (displayName == null || displayName.isEmpty()) ? (name != null ? name : "") : displayName;
-        return Forge.getLocalizer().getMessageorUseDefault(locDisplayName, fallback);
+        return Config.instance().getMessage(locDisplayName, fallback);
     }
 }
