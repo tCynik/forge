@@ -27,6 +27,7 @@
     - [Create Maps](Adventure/Create-new-Maps.md)
     - [Configure Planes](Adventure/Configure-Planes.md)
     - [Configure Starting Sets](Adventure/Configure-Sets.md)
+    - [Localization](Adventure/Localization.md)
 
   - Tutorials
     - [Tutorial 1, Create your first Plane](Adventure/Tutorial-1-Create-your-First-Plane.md)
