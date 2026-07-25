@@ -6900,14 +6900,19 @@
 	"id": 28,
 	"isTemplate": true,
 	"name": "Entering Shandalar",
+	"locName": "adv.shandalar.q28.name",
 	"description": "Learn about your surroundings.",
+	"locDescription": "adv.shandalar.q28.desc",
 	"offerDialog": {},
 	"prologue": {
 		"text": "Darkness and silence surrounds you. A vague sense of falling slows second by second.",
+		"loctext": "adv.shandalar.q28.prologue.text",
 		"options": [
 			{
 				"name": "Where am I? What am I? What is going on? (Tutorial and main quest)",
+				"locname": "adv.shandalar.q28.prologue.opt1.name",
 				"text": "A flash of light brighter than anything you remember precedes a fall to a stone floor. This is almost as jarring as realizing that you actually don't remember much of anything at all.",
+				"loctext": "adv.shandalar.q28.prologue.opt1.text",
 				"options": [
 					{
 						"action": [
@@ -6929,7 +6934,9 @@
 							}
 						],
 						"name": "Let's talk to the mage over there.",
-						"text": "A quiet crackling sound draws your eyes to the flickering light of a fire within the cave you now occupy. A hooded figure stands by the fire, facing you as if expecting your arrival."
+						"locname": "adv.shandalar.q28.prologue.opt1.opt1.name",
+						"text": "A quiet crackling sound draws your eyes to the flickering light of a fire within the cave you now occupy. A hooded figure stands by the fire, facing you as if expecting your arrival.",
+						"loctext": "adv.shandalar.q28.prologue.opt1.opt1.text"
 					}
 				]
 			},
@@ -6952,7 +6959,9 @@
 					}
 				],
 				"name": "I want to find the planeswalkers (Future release)",
+				"locname": "adv.shandalar.q28.prologue.opt2.name",
 				"text": "Well, shouting \"Planeswalkers, where are you?\" into the wastes won't do much. Travel to the nearest settlement and ask around for information.",
+				"loctext": "adv.shandalar.q28.prologue.opt2.text",
 				"options": [
 					{
 						"action": [
@@ -6972,10 +6981,13 @@
 							}
 						],
 						"name": "(Continue)",
+						"locname": "adv.shandalar.q28.prologue.opt2.opt1.name",
 						"text": "New Quest: A Chat with the Locals - Objective: Travel to any town in the wasteland.",
+						"loctext": "adv.shandalar.q28.prologue.opt2.opt1.text",
 						"options": [
 							{
-								"name": "(Dismiss)"
+								"name": "(Dismiss)",
+								"locname": "adv.shandalar.q28.prologue.opt2.opt1.opt1.name"
 							}
 						]
 					}
@@ -7001,7 +7013,9 @@
 					}
 				],
 				"name": "I want to make a name for myself (Future release)",
+				"locname": "adv.shandalar.q28.prologue.opt3.name",
 				"text": "Then let's go impress some people. But first, you need some impressive spells. Build your collection to begin your quest.",
+				"loctext": "adv.shandalar.q28.prologue.opt3.text",
 				"options": [
 					{
 						"action": [
@@ -7020,7 +7034,8 @@
 								"POIReference": ""
 							}
 						],
-						"name": "(Dismiss)"
+						"name": "(Dismiss)",
+						"locname": "adv.shandalar.q28.prologue.opt3.opt1.name"
 					}
 				],
 				"isDisabled": true
@@ -7032,7 +7047,9 @@
 					}
 				],
 				"name": "Been here, done that. Show me to the enemies. (New Game+)",
+				"locname": "adv.shandalar.q28.prologue.opt4.name",
 				"text": "Okay, skipping all that hard work somebody put into dialog, the portal opens and you can leave.",
+				"loctext": "adv.shandalar.q28.prologue.opt4.text",
 				"options": [
 					{
 						"action": [
@@ -7050,7 +7067,8 @@
 								"POIReference": ""
 							}
 						],
-						"name": "(Continue)"
+						"name": "(Continue)",
+						"locname": "adv.shandalar.q28.prologue.opt4.opt1.name"
 					}
 				]
 			}
