@@ -1,6 +1,7 @@
 package forge.util;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -91,7 +92,10 @@ public class Localizer {
      * leave that bundle absent, not an error.
      */
     public void registerBundle(final String bundleName) {
-        registeredBundleNames.add(bundleName);
+        //Already registered: setLanguage() already reloads every registered bundle whenever
+        //the locale actually changes, so there's nothing further to do here for a repeat call.
+        if (!registeredBundleNames.add(bundleName))
+            return;
         loadAdditionalBundle(bundleName);
     }
 
@@ -101,10 +105,11 @@ public class Localizer {
         try {
             File file = new File(languagesDirectory);
             URL[] urls = { file.toURI().toURL() };
-            ClassLoader loader = new URLClassLoader(urls);
-            ResourceBundle bundle = ResourceBundle.getBundle(bundleName + "-" + languageRegionID, locale, loader);
-            additionalBundles.put(bundleName, bundle);
-        } catch (MalformedURLException | NullPointerException | MissingResourceException e) {
+            try (URLClassLoader loader = new URLClassLoader(urls)) {
+                ResourceBundle bundle = ResourceBundle.getBundle(bundleName + "-" + languageRegionID, locale, loader);
+                additionalBundles.put(bundleName, bundle);
+            }
+        } catch (IOException | NullPointerException | MissingResourceException e) {
             additionalBundles.remove(bundleName);
         }
     }
