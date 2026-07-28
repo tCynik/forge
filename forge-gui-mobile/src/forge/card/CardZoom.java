@@ -455,6 +455,10 @@ public class CardZoom extends FOverlay {
         float maxCardHeight = h - AspectRatioMultiplier * messageHeight; //maxheight of currently zoomed card
 
         float cardWidth, cardHeight, y;
+        //size the displaced card rests at in the two-card layout before a drag starts;
+        //captured below so it can render unscaled at that exact size for its whole exit
+        float neighborCardWidth = 0f, neighborCardHeight = 0f;
+        boolean twoCardLayout = !(oneCardView && !Forge.isLandscapeMode());
 
         if (oneCardView && !Forge.isLandscapeMode()) {
             cardWidth = w;
@@ -477,6 +481,8 @@ public class CardZoom extends FOverlay {
                 cardHeight = maxSideCardHeight;
                 cardWidth = cardHeight / FCardPanel.ASPECT_RATIO;
             }
+            neighborCardWidth = cardWidth;
+            neighborCardHeight = cardHeight;
             y = (h - cardHeight) / 2;
             if (slideOffset == 0) { //once dragging starts, these are replaced by the animated versions below
                 if (prevCard != null) {
@@ -503,10 +509,18 @@ public class CardZoom extends FOverlay {
         //0 at center, 1 at fully handed off to the incoming card
         float slideProgress = slideDistance > 0 ? Math.min(1f, Math.abs(slideOffset) / slideDistance) : 0f;
         float centerScale = 1f - (1f - INACTIVE_SCALE) * slideProgress;
-        float incomingScale = slideProgress; //grows from nothing at the edge to full size at center, no starting pop
-        //displaced card ramps up to its constant resting scale over a small fraction of the
-        //drag so it doesn't pop into existence at full size on the very first frame, then
-        //holds that scale for the rest of its exit, per spec: no size change while leaving
+        float incomingScale = slideProgress; //single-card layout fallback only; grows from nothing at the edge to full size at center
+        //two-card layout only: how far the incoming card's center must travel from its resting
+        //position to the screen center; used so its size finishes growing exactly when it
+        //arrives, instead of size and position progressing at different rates (size is tied to
+        //the whole 2-cardWidth gesture via slideProgress, but position reaches center after
+        //just 1 cardWidth of travel)
+        float incomingArriveDistance = w / 2f - neighborCardWidth / 2f;
+        //single-card layout fallback only (no rest size to match there): displaced card ramps
+        //up to its constant resting scale over a small fraction of the drag so it doesn't pop
+        //into existence at full size on the very first frame, then holds that scale for the
+        //rest of its exit. In the two-card layout, drawDisplacedNeighbor() is used instead,
+        //matching neighborCardWidth/Height exactly so there's no size change at all.
         float displacedScale = INACTIVE_SCALE * Math.min(1f, slideProgress / 0.08f);
         //the replaced card only exists as a drag candidate; its whole exit is driven live by
         //the finger, so once a commit has happened it's already off-screen and isn't drawn
@@ -515,18 +529,37 @@ public class CardZoom extends FOverlay {
             if (slideOffset > 0) {
                 //incoming: was waiting just off to the left, slides in and grows to take over center
                 if (prevCard != null) {
-                    drawSlideNeighbor(g, prevCard, gameView, x - cardWidth, y, cardWidth, cardHeight, incomingScale);
+                    if (twoCardLayout) {
+                        drawIncomingNeighbor(g, prevCard, gameView, neighborCardWidth / 2f, neighborCardWidth, neighborCardHeight,
+                                cardWidth, cardHeight, slideOffset / incomingArriveDistance);
+                    } else {
+                        drawSlideNeighbor(g, prevCard, gameView, x - cardWidth, y, cardWidth, cardHeight, incomingScale);
+                    }
                 }
                 //displaced: was resting just off to the right, gets pushed further out of view
+                //at a constant size (its resting size), never scaling
                 if (nextCard != null) {
-                    drawSlideNeighbor(g, nextCard, gameView, x + cardWidth, y, cardWidth, cardHeight, displacedScale);
+                    if (twoCardLayout) {
+                        drawDisplacedNeighbor(g, nextCard, gameView, w - neighborCardWidth + slideOffset, neighborCardWidth, neighborCardHeight);
+                    } else {
+                        drawSlideNeighbor(g, nextCard, gameView, x + cardWidth, y, cardWidth, cardHeight, displacedScale);
+                    }
                 }
             } else if (slideOffset < 0) {
                 if (nextCard != null) {
-                    drawSlideNeighbor(g, nextCard, gameView, x + cardWidth, y, cardWidth, cardHeight, incomingScale);
+                    if (twoCardLayout) {
+                        drawIncomingNeighbor(g, nextCard, gameView, w - neighborCardWidth / 2f, neighborCardWidth, neighborCardHeight,
+                                cardWidth, cardHeight, -slideOffset / incomingArriveDistance);
+                    } else {
+                        drawSlideNeighbor(g, nextCard, gameView, x + cardWidth, y, cardWidth, cardHeight, incomingScale);
+                    }
                 }
                 if (prevCard != null) {
-                    drawSlideNeighbor(g, prevCard, gameView, x - cardWidth, y, cardWidth, cardHeight, displacedScale);
+                    if (twoCardLayout) {
+                        drawDisplacedNeighbor(g, prevCard, gameView, slideOffset, neighborCardWidth, neighborCardHeight);
+                    } else {
+                        drawSlideNeighbor(g, prevCard, gameView, x - cardWidth, y, cardWidth, cardHeight, displacedScale);
+                    }
                 }
             }
         }
@@ -582,6 +615,40 @@ public class CardZoom extends FOverlay {
             CardImageRenderer.drawZoom(g, card, gameView, false, drawX, drawY, drawWidth, drawHeight, getWidth(), getHeight(), false);
         } else {
             CardImageRenderer.drawDetails(g, card, gameView, false, drawX, drawY, drawWidth, drawHeight);
+        }
+    }
+
+    //draws the incoming neighbor interpolating both size and position together, from its
+    //resting/"peek" size and position up to the central card's resting size centered on
+    //screen, so it arrives at full size exactly when it arrives at center (progress is
+    //clamped so overshooting the drag past that point just holds it there, no more growth
+    //or movement)
+    private void drawIncomingNeighbor(Graphics g, CardView card, GameView gameView, float restCenterX,
+                                       float neighborWidth, float neighborHeight,
+                                       float centerWidth, float centerHeight, float progress) {
+        progress = Math.max(0f, Math.min(1f, progress));
+        float targetCenterX = getWidth() / 2f;
+        float drawWidth = neighborWidth + (centerWidth - neighborWidth) * progress;
+        float drawHeight = neighborHeight + (centerHeight - neighborHeight) * progress;
+        float centerX = restCenterX + (targetCenterX - restCenterX) * progress;
+        float drawX = centerX - drawWidth / 2f;
+        float drawY = (getHeight() - drawHeight) / 2f;
+        if (zoomMode) {
+            CardImageRenderer.drawZoom(g, card, gameView, false, drawX, drawY, drawWidth, drawHeight, getWidth(), getHeight(), false);
+        } else {
+            CardImageRenderer.drawDetails(g, card, gameView, false, drawX, drawY, drawWidth, drawHeight);
+        }
+    }
+
+    //draws the displaced neighbor at a fixed size (its resting/"peek" size) for the entire
+    //drag, only translating it horizontally as the gesture progresses; unlike the incoming
+    //and current cards, it must never change size while leaving
+    private void drawDisplacedNeighbor(Graphics g, CardView card, GameView gameView, float x, float cardWidth, float cardHeight) {
+        float y = (getHeight() - cardHeight) / 2;
+        if (zoomMode) {
+            CardImageRenderer.drawZoom(g, card, gameView, false, x, y, cardWidth, cardHeight, getWidth(), getHeight(), false);
+        } else {
+            CardImageRenderer.drawDetails(g, card, gameView, false, x, y, cardWidth, cardHeight);
         }
     }
 
