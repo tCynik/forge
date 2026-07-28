@@ -59,7 +59,6 @@ public class CardZoom extends FOverlay {
     private static boolean showBackSide = false;
     private static boolean showMerged = false;
     private static final float INACTIVE_SCALE = 0.4f; //single-card layout fallback only: how far the active card shrinks when fully dragged away
-    private static final float NEIGHBOR_GAP_RATIO = 0.08f; //gap, as a fraction of the neighbor's resting width, left between the incoming (замещающая) card and the trailing (приходящая) card sliding in behind it
     private static float slideOffset = 0f;
     private static SlideAnimation activeSlideAnimation;
     private static boolean dragged; //true once pan() fires for the current gesture
@@ -549,9 +548,6 @@ public class CardZoom extends FOverlay {
         //the whole 2-cardWidth gesture via slideProgress, but position reaches center after
         //just 1 cardWidth of travel)
         float incomingArriveDistance = w / 2f - neighborCardWidth / 2f;
-        //two-card layout only: how far short of the old peek slot boundary the trailing card
-        //stops, so it never touches/overlaps the incoming card it's chasing
-        float neighborGap = neighborCardWidth * NEIGHBOR_GAP_RATIO;
         //single-card layout fallback only (no rest size to match there): displaced card ramps
         //up to its constant resting scale over a small fraction of the drag so it doesn't pop
         //into existence at full size on the very first frame, then holds that scale for the
@@ -566,8 +562,18 @@ public class CardZoom extends FOverlay {
                 //incoming: was waiting just off to the left, slides in and grows to take over center
                 if (prevCard != null) {
                     if (twoCardLayout) {
-                        drawIncomingNeighbor(g, prevCard, gameView, neighborCardWidth / 2f, neighborCardWidth, neighborCardHeight,
-                                cardWidth, cardHeight, slideOffset / incomingArriveDistance);
+                        float progress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, slideOffset / incomingArriveDistance)) : 0f;
+                        float incomingCenterX = neighborCardWidth / 2f + (w / 2f - neighborCardWidth / 2f) * progress;
+                        float incomingW = neighborCardWidth + (cardWidth - neighborCardWidth) * progress;
+                        float incomingH = neighborCardHeight + (cardHeight - neighborCardHeight) * progress;
+                        drawCenteredNeighbor(g, prevCard, gameView, incomingCenterX, incomingW, incomingH);
+                        //trailing: rigidly tied to the incoming card's own live coordinate,
+                        //always incomingArriveDistance behind it, so it can never overlap or
+                        //cross it and arrives exactly at the vacated peek slot the moment
+                        //incoming arrives at center
+                        if (farPrevCard != null) {
+                            drawCenteredNeighbor(g, farPrevCard, gameView, incomingCenterX - incomingArriveDistance, neighborCardWidth, neighborCardHeight);
+                        }
                     } else {
                         drawSlideNeighbor(g, prevCard, gameView, x - cardWidth, y, cardWidth, cardHeight, incomingScale);
                     }
@@ -581,19 +587,17 @@ public class CardZoom extends FOverlay {
                         drawSlideNeighbor(g, nextCard, gameView, x + cardWidth, y, cardWidth, cardHeight, displacedScale);
                     }
                 }
-                //trailing: slides in from off-screen behind the incoming card, at a constant
-                //size, to fill the left peek slot the incoming card is vacating; clamped so it
-                //stops short of that slot by neighborGap instead of following slideOffset
-                //indefinitely and running into the incoming card
-                if (twoCardLayout && farPrevCard != null) {
-                    float trailingX = Math.min(-neighborCardWidth + slideOffset, -neighborGap);
-                    drawDisplacedNeighbor(g, farPrevCard, gameView, trailingX, neighborCardWidth, neighborCardHeight);
-                }
             } else if (slideOffset < 0) {
                 if (nextCard != null) {
                     if (twoCardLayout) {
-                        drawIncomingNeighbor(g, nextCard, gameView, w - neighborCardWidth / 2f, neighborCardWidth, neighborCardHeight,
-                                cardWidth, cardHeight, -slideOffset / incomingArriveDistance);
+                        float progress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, -slideOffset / incomingArriveDistance)) : 0f;
+                        float incomingCenterX = w - neighborCardWidth / 2f - (w / 2f - neighborCardWidth / 2f) * progress;
+                        float incomingW = neighborCardWidth + (cardWidth - neighborCardWidth) * progress;
+                        float incomingH = neighborCardHeight + (cardHeight - neighborCardHeight) * progress;
+                        drawCenteredNeighbor(g, nextCard, gameView, incomingCenterX, incomingW, incomingH);
+                        if (farNextCard != null) {
+                            drawCenteredNeighbor(g, farNextCard, gameView, incomingCenterX + incomingArriveDistance, neighborCardWidth, neighborCardHeight);
+                        }
                     } else {
                         drawSlideNeighbor(g, nextCard, gameView, x + cardWidth, y, cardWidth, cardHeight, incomingScale);
                     }
@@ -604,14 +608,6 @@ public class CardZoom extends FOverlay {
                     } else {
                         drawSlideNeighbor(g, prevCard, gameView, x - cardWidth, y, cardWidth, cardHeight, displacedScale);
                     }
-                }
-                //trailing: slides in from off-screen behind the incoming card, at a constant
-                //size, to fill the right peek slot the incoming card is vacating; clamped so it
-                //stops short of that slot by neighborGap instead of following slideOffset
-                //indefinitely and running into the incoming card
-                if (twoCardLayout && farNextCard != null) {
-                    float trailingX = Math.max(w + slideOffset, w - neighborCardWidth + neighborGap);
-                    drawDisplacedNeighbor(g, farNextCard, gameView, trailingX, neighborCardWidth, neighborCardHeight);
                 }
             }
         }
@@ -686,25 +682,17 @@ public class CardZoom extends FOverlay {
         }
     }
 
-    //draws the incoming neighbor interpolating both size and position together, from its
-    //resting/"peek" size and position up to the central card's resting size centered on
-    //screen, so it arrives at full size exactly when it arrives at center (progress is
-    //clamped so overshooting the drag past that point just holds it there, no more growth
-    //or movement)
-    private void drawIncomingNeighbor(Graphics g, CardView card, GameView gameView, float restCenterX,
-                                       float neighborWidth, float neighborHeight,
-                                       float centerWidth, float centerHeight, float progress) {
-        progress = Math.max(0f, Math.min(1f, progress));
-        float targetCenterX = getWidth() / 2f;
-        float drawWidth = neighborWidth + (centerWidth - neighborWidth) * progress;
-        float drawHeight = neighborHeight + (centerHeight - neighborHeight) * progress;
-        float centerX = restCenterX + (targetCenterX - restCenterX) * progress;
-        float drawX = centerX - drawWidth / 2f;
-        float drawY = (getHeight() - drawHeight) / 2f;
+    //draws a neighbor at a fixed size, centered at centerX; used for the incoming card (whose
+    //live centerX/size are computed by the caller) and the trailing card (whose centerX is
+    //derived directly from the incoming card's own live centerX, so the two are always a
+    //fixed distance apart and can never overlap or cross)
+    private void drawCenteredNeighbor(Graphics g, CardView card, GameView gameView, float centerX, float width, float height) {
+        float drawX = centerX - width / 2f;
+        float drawY = (getHeight() - height) / 2f;
         if (zoomMode) {
-            CardImageRenderer.drawZoom(g, card, gameView, false, drawX, drawY, drawWidth, drawHeight, getWidth(), getHeight(), false);
+            CardImageRenderer.drawZoom(g, card, gameView, false, drawX, drawY, width, height, getWidth(), getHeight(), false);
         } else {
-            CardImageRenderer.drawDetails(g, card, gameView, false, drawX, drawY, drawWidth, drawHeight);
+            CardImageRenderer.drawDetails(g, card, gameView, false, drawX, drawY, width, height);
         }
     }
 
