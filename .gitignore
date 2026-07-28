@@ -60,6 +60,8 @@ forge-gui-android/res/*/*
 !forge-gui-android/res/layout/main.xml
 forge-gui-android/*.keystore
 forge-gui-android/**/Thumbs.db
+forge-gui-android/scripts/.device-state.json
+forge-gui-android/scripts/backups/
 forge-gui-mobile-dev/**/Thumbs.db
 forge-gui-mobile-dev/res
 forge-gui-mobile-dev/testAssets
