@@ -226,6 +226,14 @@ public class CardZoom extends FOverlay {
             return;
         }
         outgoingSettle = false;
+        if (Math.abs(slideOffset) >= neighborCardWidthCache) {
+            //already dragged (or flung) past the point where everything has visually
+            //converged - e.g. dragged all the way to the screen edge; finish immediately
+            //instead of animating backward toward neighborCardWidthCache, which would look
+            //like the card bouncing back before continuing on
+            finishCommit(dir);
+            return;
+        }
         //continue onward in whichever direction slideOffset was already moving; note this is
         //not necessarily the same sign as dir (dir reflects the index/role-swap direction,
         //e.g. dragging right increases slideOffset but decrements currentIndex, dir=-1)
@@ -241,7 +249,7 @@ public class CardZoom extends FOverlay {
     }
 
     private static class SlideAnimation extends ForgeAnimation {
-        private static final float DURATION = 0.2f;
+        private static final float DURATION = 0.3f; //50% slower than the original 0.2f
 
         private final float startOffset;
         private final float endOffset;
