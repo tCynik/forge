@@ -46,6 +46,7 @@ public class CardZoom extends FOverlay {
     private static List<?> items;
     private static int currentIndex, initialIndex;
     private static CardView currentCard, prevCard, nextCard;
+    private static CardView farPrevCard, farNextCard; //one further back than prevCard/nextCard; slides in behind whichever neighbor is currently incoming, to fill the peek slot it's vacating
     private static boolean zoomMode = true;
     private static boolean oneCardView = prefs.getPrefBoolean(FPref.UI_SINGLE_CARD_ZOOM);
     private float totalZoomAmount;
@@ -57,12 +58,14 @@ public class CardZoom extends FOverlay {
     private static boolean showAltState;
     private static boolean showBackSide = false;
     private static boolean showMerged = false;
-    private static final float INACTIVE_SCALE = 0.4f; //how far the active card shrinks when fully dragged away; also the resting size of the displaced (замещаемая) card
+    private static final float INACTIVE_SCALE = 0.4f; //single-card layout fallback only: how far the active card shrinks when fully dragged away
+    private static final float NEIGHBOR_GAP_RATIO = 0.08f; //gap, as a fraction of the neighbor's resting width, left between the incoming (замещающая) card and the trailing (приходящая) card sliding in behind it
     private static float slideOffset = 0f;
     private static SlideAnimation activeSlideAnimation;
     private static boolean dragged; //true once pan() fires for the current gesture
     private static boolean outgoingSettle; //true while the neighbor slot is the just-replaced card fleeing off-screen (no scaling), false while it's a drag candidate (scaled)
     private static float slideDistance; //cached from the last layout; the unit of travel for the whole slide/scale transition
+    private static float neighborCardWidthCache; //cached from the last layout; >0 means the two-card layout is active, and is the distance commitDrag() animates slideOffset out to before flipping roles
 
     public static void show(Object item) {
         show(item, false);
@@ -158,25 +161,29 @@ public class CardZoom extends FOverlay {
 
     private static void incrementCard(int dir) {
         if (dir > 0) {
-            if (currentIndex == items.size() - 1) {
-                return;
-            }
-            currentIndex++;
+            if (currentIndex == items.size() - 1) { return; }
+        } else {
+            if (currentIndex == 0) { return; }
+        }
+        swapCurrentCard(dir);
+        onCardChanged();
+        startSlideAnimation(dir);
+    }
 
+    //moves currentIndex by dir and rotates prevCard/currentCard/nextCard accordingly; caller
+    //is responsible for bounds-checking dir against currentIndex first
+    private static void swapCurrentCard(int dir) {
+        if (dir > 0) {
+            currentIndex++;
             prevCard = currentCard;
             currentCard = nextCard;
             nextCard = currentIndex < items.size() - 1 ? getCardView(items.get(currentIndex + 1)) : null;
-        }
-        else {
-            if (currentIndex == 0) { return; }
+        } else {
             currentIndex--;
-
             nextCard = currentCard;
             currentCard = prevCard;
             prevCard = currentIndex > 0 ? getCardView(items.get(currentIndex - 1)) : null;
         }
-        onCardChanged();
-        startSlideAnimation(dir);
     }
 
     private static void startSlideAnimation(int dir) {
@@ -195,38 +202,58 @@ public class CardZoom extends FOverlay {
             slideOffset = 0;
             return;
         }
-        activeSlideAnimation = new SlideAnimation(offset);
+        activeSlideAnimation = new SlideAnimation(offset, 0, null);
         activeSlideAnimation.start();
     }
 
-    //commit a drag past the reveal threshold: swap card identities like incrementCard(dir),
-    //but continue the settle animation from the drag's current offset instead of restarting
-    //from a full off-screen distance, so the motion doesn't jump when the finger releases
+    //commit a drag past the reveal threshold. In the two-card layout, the actual index/role
+    //swap is deferred until the settle finishes: slideOffset keeps animating onward in the
+    //same direction, through the exact same live-drag rendering (incoming growing to center,
+    //current shrinking toward its future neighbor size/position, displaced/trailing
+    //translating) all the way to neighborCardWidthCache - the point where everything has
+    //visually converged to what the new rest state will look like - so nothing jumps at the
+    //moment of release. Only then does finishCommit() flip the data model and zero
+    //slideOffset. The single-card layout has no separate resting neighbor size to converge
+    //to, so it keeps the old swap-immediately-then-settle-to-0 behavior.
     private static void commitDrag(int dir, float distance) {
-        if (dir > 0) {
-            currentIndex++;
-            prevCard = currentCard;
-            currentCard = nextCard;
-            nextCard = currentIndex < items.size() - 1 ? getCardView(items.get(currentIndex + 1)) : null;
-        } else {
-            currentIndex--;
-            nextCard = currentCard;
-            currentCard = prevCard;
-            prevCard = currentIndex > 0 ? getCardView(items.get(currentIndex - 1)) : null;
+        if (activeSlideAnimation != null) {
+            activeSlideAnimation.stop();
         }
+        if (neighborCardWidthCache <= 0) {
+            swapCurrentCard(dir);
+            onCardChanged();
+            outgoingSettle = true;
+            settleTo(dir > 0 ? slideOffset + distance : slideOffset - distance);
+            return;
+        }
+        outgoingSettle = false;
+        //continue onward in whichever direction slideOffset was already moving; note this is
+        //not necessarily the same sign as dir (dir reflects the index/role-swap direction,
+        //e.g. dragging right increases slideOffset but decrements currentIndex, dir=-1)
+        float endOffset = slideOffset > 0 ? neighborCardWidthCache : -neighborCardWidthCache;
+        activeSlideAnimation = new SlideAnimation(slideOffset, endOffset, () -> finishCommit(dir));
+        activeSlideAnimation.start();
+    }
+
+    private static void finishCommit(int dir) {
+        swapCurrentCard(dir);
         onCardChanged();
-        outgoingSettle = true;
-        settleTo(dir > 0 ? slideOffset + distance : slideOffset - distance);
+        slideOffset = 0;
     }
 
     private static class SlideAnimation extends ForgeAnimation {
         private static final float DURATION = 0.2f;
 
         private final float startOffset;
+        private final float endOffset;
+        private final Runnable onComplete; //run only if this animation reaches endOffset on its own; not if interrupted (e.g. the user grabs the card again mid-settle)
         private float elapsed;
+        private boolean finishedNaturally;
 
-        private SlideAnimation(float startOffset) {
+        private SlideAnimation(float startOffset, float endOffset, Runnable onComplete) {
             this.startOffset = startOffset;
+            this.endOffset = endOffset;
+            this.onComplete = onComplete;
             slideOffset = startOffset;
         }
 
@@ -234,21 +261,26 @@ public class CardZoom extends FOverlay {
         protected boolean advance(float dt) {
             elapsed += dt;
             if (elapsed >= DURATION) {
-                slideOffset = 0;
+                slideOffset = endOffset;
+                finishedNaturally = true;
                 return false;
             }
-            slideOffset = startOffset * (1 - Interpolation.pow2Out.apply(elapsed / DURATION));
+            slideOffset = endOffset + (startOffset - endOffset) * (1 - Interpolation.pow2Out.apply(elapsed / DURATION));
             return true;
         }
 
         @Override
         protected void onEnd(boolean endingAll) {
-            slideOffset = 0;
             activeSlideAnimation = null;
+            if (finishedNaturally && onComplete != null) {
+                onComplete.run();
+            }
         }
     }
 
     private static void onCardChanged() {
+        farPrevCard = currentIndex > 1 ? getCardView(items.get(currentIndex - 2)) : null;
+        farNextCard = currentIndex < items.size() - 2 ? getCardView(items.get(currentIndex + 2)) : null;
         mutateIconBounds = null;
         if (activateHandler != null) {
             currentActivateAction = activateHandler.getActivateAction(currentIndex);
@@ -504,6 +536,7 @@ public class CardZoom extends FOverlay {
         //cache for pan()/panStop(), which have no layout info of their own; a full card-width
         //made the transition feel cramped/rushed, so the whole gesture spans two card-widths
         slideDistance = cardWidth * 2f;
+        neighborCardWidthCache = neighborCardWidth; //cache for commitDrag(), which has no layout info of its own
         float x = (w - cardWidth) / 2 + slideOffset;
         y = (h - cardHeight) / 2;
         //0 at center, 1 at fully handed off to the incoming card
@@ -516,6 +549,9 @@ public class CardZoom extends FOverlay {
         //the whole 2-cardWidth gesture via slideProgress, but position reaches center after
         //just 1 cardWidth of travel)
         float incomingArriveDistance = w / 2f - neighborCardWidth / 2f;
+        //two-card layout only: how far short of the old peek slot boundary the trailing card
+        //stops, so it never touches/overlaps the incoming card it's chasing
+        float neighborGap = neighborCardWidth * NEIGHBOR_GAP_RATIO;
         //single-card layout fallback only (no rest size to match there): displaced card ramps
         //up to its constant resting scale over a small fraction of the drag so it doesn't pop
         //into existence at full size on the very first frame, then holds that scale for the
@@ -545,6 +581,14 @@ public class CardZoom extends FOverlay {
                         drawSlideNeighbor(g, nextCard, gameView, x + cardWidth, y, cardWidth, cardHeight, displacedScale);
                     }
                 }
+                //trailing: slides in from off-screen behind the incoming card, at a constant
+                //size, to fill the left peek slot the incoming card is vacating; clamped so it
+                //stops short of that slot by neighborGap instead of following slideOffset
+                //indefinitely and running into the incoming card
+                if (twoCardLayout && farPrevCard != null) {
+                    float trailingX = Math.min(-neighborCardWidth + slideOffset, -neighborGap);
+                    drawDisplacedNeighbor(g, farPrevCard, gameView, trailingX, neighborCardWidth, neighborCardHeight);
+                }
             } else if (slideOffset < 0) {
                 if (nextCard != null) {
                     if (twoCardLayout) {
@@ -561,12 +605,36 @@ public class CardZoom extends FOverlay {
                         drawSlideNeighbor(g, prevCard, gameView, x - cardWidth, y, cardWidth, cardHeight, displacedScale);
                     }
                 }
+                //trailing: slides in from off-screen behind the incoming card, at a constant
+                //size, to fill the right peek slot the incoming card is vacating; clamped so it
+                //stops short of that slot by neighborGap instead of following slideOffset
+                //indefinitely and running into the incoming card
+                if (twoCardLayout && farNextCard != null) {
+                    float trailingX = Math.max(w + slideOffset, w - neighborCardWidth + neighborGap);
+                    drawDisplacedNeighbor(g, farNextCard, gameView, trailingX, neighborCardWidth, neighborCardHeight);
+                }
             }
         }
-        float centerDrawWidth = cardWidth * centerScale;
-        float centerDrawHeight = cardHeight * centerScale;
-        float centerDrawX = x + (cardWidth - centerDrawWidth) / 2;
-        float centerDrawY = y + (cardHeight - centerDrawHeight) / 2;
+        float centerDrawWidth, centerDrawHeight, centerDrawX, centerDrawY;
+        if (twoCardLayout) {
+            //mirrors drawIncomingNeighbor: shrinks from full center size/position toward the
+            //exact peek size/position it will occupy as the new neighbor once the drag/commit
+            //completes, instead of an arbitrary INACTIVE_SCALE-based shrink that wouldn't
+            //match that target - this is what makes the post-commit hand-off in
+            //finishCommit()/commitDrag() seamless instead of jumping
+            float leaveProgress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, Math.abs(slideOffset) / incomingArriveDistance)) : 0f;
+            float futureRestCenterX = slideOffset > 0 ? w - neighborCardWidth / 2f : neighborCardWidth / 2f;
+            centerDrawWidth = cardWidth + (neighborCardWidth - cardWidth) * leaveProgress;
+            centerDrawHeight = cardHeight + (neighborCardHeight - cardHeight) * leaveProgress;
+            float centerX = w / 2f + (futureRestCenterX - w / 2f) * leaveProgress;
+            centerDrawX = centerX - centerDrawWidth / 2f;
+            centerDrawY = (h - centerDrawHeight) / 2f;
+        } else {
+            centerDrawWidth = cardWidth * centerScale;
+            centerDrawHeight = cardHeight * centerScale;
+            centerDrawX = x + (cardWidth - centerDrawWidth) / 2;
+            centerDrawY = y + (cardHeight - centerDrawHeight) / 2;
+        }
         if (zoomMode) {
             if (currentCard != null)
                 CardImageRenderer.drawZoom(g, currentCard, gameView, showBackSide? showBackSide : showAltState, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight, getWidth(), getHeight(), true);
