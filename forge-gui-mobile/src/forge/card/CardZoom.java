@@ -71,7 +71,8 @@ public class CardZoom extends FOverlay {
     private static float incomingArriveDistanceCache; //cached from the last layout; the distance commitDrag() animates slideOffset out to before flipping roles (see incomingArriveDistance below)
     private static float verticalDragOffset = 0f; //<=0 while a swipe-up-to-play drag or its commit/settle animation is live; 0 = rest
     private static VerticalDragAnimation activeVerticalDragAnimation;
-    private static float verticalDragDistance; //cached from the last layout; drag distance needed to fully commit the swipe-up-to-play gesture
+    private static float verticalDragDistance; //cached from the last layout; scale-progress reference for the swipe-up-to-play gesture (see its use in drawOverlay)
+    private static float verticalDragTravelDistance; //cached from the last layout; actual drag/commit distance - half of verticalDragDistance, the point where the shrink (see VERTICAL_DRAG_MIN_SCALE) finishes, so movement doesn't keep going after the card has already stopped shrinking
     private static boolean verticalPanStopHandled; //true for the one fling() call immediately following a panStop() that already committed/settled a live vertical drag (either swipe-up-to-play or swipe-down-to-flip) this gesture
     private static float viewFlipOffset = 0f; //>=0 while a swipe-down page-flip drag or its commit/settle animation is live; 0 = rest
     private static ViewFlipAnimation activeViewFlipAnimation;
@@ -322,15 +323,15 @@ public class CardZoom extends FOverlay {
     }
 
     //continues the swipe-up-to-play gesture on past release, the rest of the way to its capped
-    //resting offset (verticalDragDistance - never off-screen, see its caching in drawOverlay),
-    //before actually playing the card - so a released drag finishes the same visual journey a
-    //full manual drag would have (falling onto the table, still in view), instead of jumping
-    //straight to the post-play state the instant the finger lifts
+    //resting offset (verticalDragTravelDistance - never off-screen, see its caching in
+    //drawOverlay), before actually playing the card - so a released drag finishes the same
+    //visual journey a full manual drag would have (falling onto the table, still in view),
+    //instead of jumping straight to the post-play state the instant the finger lifts
     private static void commitVerticalDrag() {
         if (activeVerticalDragAnimation != null) {
             activeVerticalDragAnimation.stop();
         }
-        activeVerticalDragAnimation = new VerticalDragAnimation(verticalDragOffset, -verticalDragDistance, CardZoom::finishVerticalCommit);
+        activeVerticalDragAnimation = new VerticalDragAnimation(verticalDragOffset, -verticalDragTravelDistance, CardZoom::finishVerticalCommit);
         activeVerticalDragAnimation.start();
     }
 
@@ -592,8 +593,8 @@ public class CardZoom extends FOverlay {
                 verticalDragOffset += deltaY * VERTICAL_DRAG_SENSITIVITY;
                 if (verticalDragOffset > 0f) {
                     verticalDragOffset = 0f;
-                } else if (verticalDragDistance > 0f && verticalDragOffset < -verticalDragDistance) {
-                    verticalDragOffset = -verticalDragDistance;
+                } else if (verticalDragTravelDistance > 0f && verticalDragOffset < -verticalDragTravelDistance) {
+                    verticalDragOffset = -verticalDragTravelDistance;
                 }
                 return true;
             }
@@ -628,7 +629,7 @@ public class CardZoom extends FOverlay {
     public boolean panStop(float x, float y) {
         if (verticalDragOffset != 0f) {
             verticalPanStopHandled = true;
-            float progress = verticalDragDistance > 0f ? -verticalDragOffset / verticalDragDistance : 0f;
+            float progress = verticalDragTravelDistance > 0f ? -verticalDragOffset / verticalDragTravelDistance : 0f;
             if (progress >= VERTICAL_COMMIT_THRESHOLD) {
                 commitVerticalDrag();
             } else {
@@ -773,6 +774,7 @@ public class CardZoom extends FOverlay {
         //below the top message bar - the card should read as falling onto the table in full
         //view, not flying up out of sight
         verticalDragDistance = Math.max(0f, h / 2f - (cardHeight * VERTICAL_DRAG_MIN_SCALE) / 2f - messageHeight);
+        verticalDragTravelDistance = verticalDragDistance / 2f;
         viewFlipDistance = cardHeight; //cache for pan()/panStop(), which have no layout info of their own; a full card-height drag completes the picture/detail page-flip
         float x = (w - cardWidth) / 2 + slideOffset;
         y = (h - cardHeight) / 2;
@@ -904,12 +906,11 @@ public class CardZoom extends FOverlay {
             //live swipe-up-to-play feedback (and its post-release commit/settle animation):
             //translate linearly (1:1 with the raw offset, matching the finger exactly) while
             //shrinking with an accelerating ease-in curve, so the card reads as falling away
-            //from the hand rather than shrinking at a constant rate. verticalDragDistance is
-            //capped (see its caching above) so the card never travels off-screen - it settles,
-            //shrunk, still in view, like landing on a table, rather than flying out of sight.
-            //scale reaches full VERTICAL_DRAG_MIN_SCALE at half the travel translation covers
-            //(2x speed) - translation alone left the card looking barely shrunk by the time it
-            //reached the end of its travel
+            //from the hand rather than shrinking at a constant rate. Travel is capped at
+            //verticalDragTravelDistance (see its caching above), chosen so movement ends exactly
+            //where the shrink does - letting movement run any further past that point (as
+            //verticalDragDistance alone would) left the card visibly still translating with no
+            //further shrink for the rest of the drag
             float scaleProgress = verticalDragDistance > 0f ? Math.min(1f, -verticalDragOffset / verticalDragDistance * 2f) : 0f;
             float scale = 1f - (1f - VERTICAL_DRAG_MIN_SCALE) * Interpolation.pow2In.apply(scaleProgress);
             float centerX = centerDrawX + centerDrawWidth / 2f;
