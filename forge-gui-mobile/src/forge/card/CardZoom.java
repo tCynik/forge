@@ -64,7 +64,8 @@ public class CardZoom extends FOverlay {
     private static boolean dragged; //true once pan() fires for the current gesture
     private static boolean outgoingSettle; //true while the neighbor slot is the just-replaced card fleeing off-screen (no scaling), false while it's a drag candidate (scaled)
     private static float slideDistance; //cached from the last layout; the unit of travel for the whole slide/scale transition
-    private static float neighborCardWidthCache; //cached from the last layout; >0 means the two-card layout is active, and is the distance commitDrag() animates slideOffset out to before flipping roles
+    private static float neighborCardWidthCache; //cached from the last layout; >0 means the two-card layout is active
+    private static float incomingArriveDistanceCache; //cached from the last layout; the distance commitDrag() animates slideOffset out to before flipping roles (see incomingArriveDistance below)
 
     public static void show(Object item) {
         show(item, false);
@@ -209,7 +210,7 @@ public class CardZoom extends FOverlay {
     //swap is deferred until the settle finishes: slideOffset keeps animating onward in the
     //same direction, through the exact same live-drag rendering (incoming growing to center,
     //current shrinking toward its future neighbor size/position, displaced/trailing
-    //translating) all the way to neighborCardWidthCache - the point where everything has
+    //translating) all the way to convergeDistance (see below) - the point where everything has
     //visually converged to what the new rest state will look like - so nothing jumps at the
     //moment of release. Only then does finishCommit() flip the data model and zero
     //slideOffset. The single-card layout has no separate resting neighbor size to converge
@@ -226,10 +227,22 @@ public class CardZoom extends FOverlay {
             return;
         }
         outgoingSettle = false;
-        if (Math.abs(slideOffset) >= neighborCardWidthCache) {
+        //the point everything has visually converged is whichever is farther: neighborCardWidthCache
+        //(where the displaced/pushed-out card finishes exiting) or incomingArriveDistanceCache
+        //(where the incoming/current/trailing cards finish growing/shrinking/peeking into their
+        //rest state - see incomingArriveDistance in drawOverlay). These aren't the same distance
+        //(one's a card width, the other a center-travel distance) and on layouts where the
+        //neighbor card is squeezed narrow by a height clamp (e.g. wide/landscape screens),
+        //neighborCardWidthCache alone can be smaller than incomingArriveDistanceCache - animating
+        //only that far left the main cards mid-grow when finishCommit() snapped them straight to
+        //their fully-arrived rest state, reading as a decelerate-then-jump stutter on short/sharp
+        //swipes (a longer manual drag avoided it by already passing incomingArriveDistanceCache
+        //by hand before release).
+        float convergeDistance = Math.max(neighborCardWidthCache, incomingArriveDistanceCache);
+        if (Math.abs(slideOffset) >= convergeDistance) {
             //already dragged (or flung) past the point where everything has visually
             //converged - e.g. dragged all the way to the screen edge; finish immediately
-            //instead of animating backward toward neighborCardWidthCache, which would look
+            //instead of animating backward toward convergeDistance, which would look
             //like the card bouncing back before continuing on
             finishCommit(dir);
             return;
@@ -237,7 +250,7 @@ public class CardZoom extends FOverlay {
         //continue onward in whichever direction slideOffset was already moving; note this is
         //not necessarily the same sign as dir (dir reflects the index/role-swap direction,
         //e.g. dragging right increases slideOffset but decrements currentIndex, dir=-1)
-        float endOffset = slideOffset > 0 ? neighborCardWidthCache : -neighborCardWidthCache;
+        float endOffset = slideOffset > 0 ? convergeDistance : -convergeDistance;
         activeSlideAnimation = new SlideAnimation(slideOffset, endOffset, () -> finishCommit(dir));
         activeSlideAnimation.start();
     }
@@ -556,6 +569,7 @@ public class CardZoom extends FOverlay {
         //the whole 2-cardWidth gesture via slideProgress, but position reaches center after
         //just 1 cardWidth of travel)
         float incomingArriveDistance = w / 2f - neighborCardWidth / 2f;
+        incomingArriveDistanceCache = incomingArriveDistance; //cache for commitDrag(), which has no layout info of its own
         //single-card layout fallback only (no rest size to match there): displaced card ramps
         //up to its constant resting scale over a small fraction of the drag so it doesn't pop
         //into existence at full size on the very first frame, then holds that scale for the
