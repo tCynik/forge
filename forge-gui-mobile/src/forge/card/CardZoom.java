@@ -40,6 +40,9 @@ import forge.util.collect.FCollectionView;
 
 public class CardZoom extends FOverlay {
     private static final float REQ_AMOUNT = Utils.AVG_FINGER_WIDTH;
+    private static final float VERTICAL_DRAG_MIN_SCALE = 0.35f; //how small the card shrinks to at the point a swipe-up-to-play drag is fully committed
+    private static final float VERTICAL_COMMIT_THRESHOLD = 0.3f; //fraction of verticalDragDistance a released drag must clear to play the card instead of springing back
+    private static final float VERTICAL_DRAG_SENSITIVITY = 0.5f; //fraction of raw finger deltaY the swipe-up-to-play drag actually responds with; halved so a small swipe no longer flies the card away
 
     private static final CardZoom cardZoom = new CardZoom();
     private static final ForgePreferences prefs = FModel.getPreferences();
@@ -65,6 +68,10 @@ public class CardZoom extends FOverlay {
     private static float slideDistance; //cached from the last layout; the unit of travel for the whole slide/scale transition
     private static float neighborCardWidthCache; //cached from the last layout; >0 means the two-card layout is active
     private static float incomingArriveDistanceCache; //cached from the last layout; the distance commitDrag() animates slideOffset out to before flipping roles (see incomingArriveDistance below)
+    private static float verticalDragOffset = 0f; //<=0 while a swipe-up-to-play drag or its commit/settle animation is live; 0 = rest
+    private static VerticalDragAnimation activeVerticalDragAnimation;
+    private static float verticalDragDistance; //cached from the last layout; drag distance needed to fully commit the swipe-up-to-play gesture
+    private static boolean verticalPanStopHandled; //true for the one fling() call immediately following a panStop() that already committed/settled a live vertical drag this gesture
 
     public static void show(Object item) {
         show(item, false);
@@ -98,6 +105,11 @@ public class CardZoom extends FOverlay {
         slideOffset = 0f;
         dragged = false;
         outgoingSettle = false;
+        if (activeVerticalDragAnimation != null) {
+            activeVerticalDragAnimation.stop();
+        }
+        verticalDragOffset = 0f;
+        verticalPanStopHandled = false;
         cardZoom.show();
     }
 
@@ -290,6 +302,79 @@ public class CardZoom extends FOverlay {
         }
     }
 
+    private static void settleVerticalTo(float offset) {
+        if (activeVerticalDragAnimation != null) {
+            activeVerticalDragAnimation.stop();
+        }
+        if (offset == verticalDragOffset) {
+            return;
+        }
+        activeVerticalDragAnimation = new VerticalDragAnimation(verticalDragOffset, offset, null);
+        activeVerticalDragAnimation.start();
+    }
+
+    //continues the swipe-up-to-play gesture on past release, the rest of the way to its capped
+    //resting offset (verticalDragDistance - never off-screen, see its caching in drawOverlay),
+    //before actually playing the card - so a released drag finishes the same visual journey a
+    //full manual drag would have (falling onto the table, still in view), instead of jumping
+    //straight to the post-play state the instant the finger lifts
+    private static void commitVerticalDrag() {
+        if (activeVerticalDragAnimation != null) {
+            activeVerticalDragAnimation.stop();
+        }
+        activeVerticalDragAnimation = new VerticalDragAnimation(verticalDragOffset, -verticalDragDistance, CardZoom::finishVerticalCommit);
+        activeVerticalDragAnimation.start();
+    }
+
+    private static void finishVerticalCommit() {
+        verticalDragOffset = 0f;
+        cardZoom.hide();
+        showBackSide = false;
+        showAltState = false;
+        if (currentActivateAction != null && activateHandler != null) {
+            activateHandler.activate(currentIndex);
+        }
+    }
+
+    //mirrors SlideAnimation, but drives verticalDragOffset for the swipe-up-to-play gesture
+    //instead of slideOffset for the horizontal card-to-card gesture
+    private static class VerticalDragAnimation extends ForgeAnimation {
+        private static final float DURATION = 0.2f;
+
+        private final float startOffset;
+        private final float endOffset;
+        private final Runnable onComplete; //run only if this animation reaches endOffset on its own; not if interrupted (e.g. the user grabs the card again mid-animation)
+        private float elapsed;
+        private boolean finishedNaturally;
+
+        private VerticalDragAnimation(float startOffset, float endOffset, Runnable onComplete) {
+            this.startOffset = startOffset;
+            this.endOffset = endOffset;
+            this.onComplete = onComplete;
+            verticalDragOffset = startOffset;
+        }
+
+        @Override
+        protected boolean advance(float dt) {
+            elapsed += dt;
+            if (elapsed >= DURATION) {
+                verticalDragOffset = endOffset;
+                finishedNaturally = true;
+                return false;
+            }
+            verticalDragOffset = endOffset + (startOffset - endOffset) * (1 - Interpolation.pow2Out.apply(elapsed / DURATION));
+            return true;
+        }
+
+        @Override
+        protected void onEnd(boolean endingAll) {
+            activeVerticalDragAnimation = null;
+            if (finishedNaturally && onComplete != null) {
+                onComplete.run();
+            }
+        }
+    }
+
     private static void onCardChanged() {
         farPrevCard = currentIndex > 1 ? getCardView(items.get(currentIndex - 2)) : null;
         farNextCard = currentIndex < items.size() - 2 ? getCardView(items.get(currentIndex + 2)) : null;
@@ -389,6 +474,12 @@ public class CardZoom extends FOverlay {
             showAltState = false;
             return true;
         }
+        if (verticalPanStopHandled) {
+            //already committed or settled by panStop() as this same gesture's release played
+            //out; avoid re-triggering here from the same release's fling velocity
+            verticalPanStopHandled = false;
+            return true;
+        }
         if (velocityY > 0) {
             zoomMode = !zoomMode;
             showBackSide = false;
@@ -396,10 +487,7 @@ public class CardZoom extends FOverlay {
             return true;
         }
         if (currentActivateAction != null && activateHandler != null) {
-            hide();
-            showBackSide = false;
-            showAltState = false;
-            activateHandler.activate(currentIndex);
+            commitVerticalDrag();
             return true;
         }
         return false;
@@ -409,7 +497,25 @@ public class CardZoom extends FOverlay {
     public boolean pan(float x, float y, float deltaX, float deltaY, boolean moreVertical) {
         dragged = true;
         outgoingSettle = false; //finger back in control; neighbor is a fresh drag candidate again
-        if (moreVertical || items == null) {
+        if (items == null) {
+            return true;
+        }
+        if (moreVertical) {
+            //live drag feedback for the swipe-up-to-play gesture only; swipe-down (toggle
+            //picture/detail view) has no drag animation of its own, it's decided purely by
+            //fling() velocity at release
+            if (currentActivateAction == null || activateHandler == null) {
+                return true;
+            }
+            if (activeVerticalDragAnimation != null) {
+                activeVerticalDragAnimation.stop();
+            }
+            verticalDragOffset += deltaY * VERTICAL_DRAG_SENSITIVITY;
+            if (verticalDragOffset > 0f) {
+                verticalDragOffset = 0f;
+            } else if (verticalDragDistance > 0f && verticalDragOffset < -verticalDragDistance) {
+                verticalDragOffset = -verticalDragDistance;
+            }
             return true;
         }
         //block only pushing further past the boundary, not correcting back toward center
@@ -429,6 +535,16 @@ public class CardZoom extends FOverlay {
 
     @Override
     public boolean panStop(float x, float y) {
+        if (verticalDragOffset != 0f) {
+            verticalPanStopHandled = true;
+            float progress = verticalDragDistance > 0f ? -verticalDragOffset / verticalDragDistance : 0f;
+            if (progress >= VERTICAL_COMMIT_THRESHOLD) {
+                commitVerticalDrag();
+            } else {
+                settleVerticalTo(0f);
+            }
+            return true;
+        }
         if (slideOffset == 0 || items == null) {
             return true;
         }
@@ -551,6 +667,11 @@ public class CardZoom extends FOverlay {
         //below), so one card-width of drag is already the whole hand-off - no need to stretch it.
         slideDistance = twoCardLayout ? cardWidth * 2f : cardWidth;
         neighborCardWidthCache = neighborCardWidth; //cache for commitDrag(), which has no layout info of its own
+        //cache for pan()/panStop(), which have no layout info of their own. Capped so that even
+        //at full travel with the card shrunk to VERTICAL_DRAG_MIN_SCALE, its top edge stays
+        //below the top message bar - the card should read as falling onto the table in full
+        //view, not flying up out of sight
+        verticalDragDistance = Math.max(0f, h / 2f - (cardHeight * VERTICAL_DRAG_MIN_SCALE) / 2f - messageHeight);
         float x = (w - cardWidth) / 2 + slideOffset;
         y = (h - cardHeight) / 2;
         //two-card layout: how far the incoming card's center must travel from its resting
@@ -676,6 +797,25 @@ public class CardZoom extends FOverlay {
             centerDrawHeight = cardHeight;
             centerDrawX = x;
             centerDrawY = y;
+        }
+        if (verticalDragOffset != 0f) {
+            //live swipe-up-to-play feedback (and its post-release commit/settle animation):
+            //translate linearly (1:1 with the raw offset, matching the finger exactly) while
+            //shrinking with an accelerating ease-in curve, so the card reads as falling away
+            //from the hand rather than shrinking at a constant rate. verticalDragDistance is
+            //capped (see its caching above) so the card never travels off-screen - it settles,
+            //shrunk, still in view, like landing on a table, rather than flying out of sight.
+            //scale reaches full VERTICAL_DRAG_MIN_SCALE at half the travel translation covers
+            //(2x speed) - translation alone left the card looking barely shrunk by the time it
+            //reached the end of its travel
+            float scaleProgress = verticalDragDistance > 0f ? Math.min(1f, -verticalDragOffset / verticalDragDistance * 2f) : 0f;
+            float scale = 1f - (1f - VERTICAL_DRAG_MIN_SCALE) * Interpolation.pow2In.apply(scaleProgress);
+            float centerX = centerDrawX + centerDrawWidth / 2f;
+            float centerY = centerDrawY + centerDrawHeight / 2f + verticalDragOffset;
+            centerDrawWidth *= scale;
+            centerDrawHeight *= scale;
+            centerDrawX = centerX - centerDrawWidth / 2f;
+            centerDrawY = centerY - centerDrawHeight / 2f;
         }
         if (zoomMode) {
             if (currentCard != null)
