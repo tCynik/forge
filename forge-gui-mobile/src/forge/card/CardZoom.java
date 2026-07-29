@@ -187,6 +187,7 @@ public class CardZoom extends FOverlay {
     }
 
     private static void startSlideAnimation(int dir) {
+        if (!Forge.isLandscapeMode()) { return; } //portrait keeps the original instant-swap, no-animation behavior
         float distance = slideDistance;
         if (distance <= 0) { return; } //overlay not laid out yet
 
@@ -415,6 +416,7 @@ public class CardZoom extends FOverlay {
 
     @Override
     public boolean pan(float x, float y, float deltaX, float deltaY, boolean moreVertical) {
+        if (!Forge.isLandscapeMode()) { return true; } //portrait keeps the original static, drag-less behavior
         dragged = true;
         outgoingSettle = false; //finger back in control; neighbor is a fresh drag candidate again
         if (moreVertical || items == null) {
@@ -437,6 +439,7 @@ public class CardZoom extends FOverlay {
 
     @Override
     public boolean panStop(float x, float y) {
+        if (!Forge.isLandscapeMode()) { return true; } //portrait keeps the original static, drag-less behavior
         if (slideOffset == 0 || items == null) {
             return true;
         }
@@ -484,6 +487,16 @@ public class CardZoom extends FOverlay {
 
     @Override
     public void drawOverlay(Graphics g) {
+        if (!Forge.isLandscapeMode() && slideOffset != 0) {
+            //covers rotating out of landscape mid-drag/mid-animation; without this the leftover
+            //offset would render one stray frame of the landscape-only carousel positioning
+            //before pan()/panStop() have a chance to run again and reset it
+            if (activeSlideAnimation != null) {
+                activeSlideAnimation.stop();
+            }
+            slideOffset = 0;
+            outgoingSettle = false;
+        }
         final GameView gameView = MatchController.instance.getGameView();
 
         float w = getWidth();
