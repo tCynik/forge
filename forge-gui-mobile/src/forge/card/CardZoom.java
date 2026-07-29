@@ -563,17 +563,19 @@ public class CardZoom extends FOverlay {
         //it just translates in, arriving after exactly one cardWidth of travel.
         float incomingArriveDistance = twoCardLayout ? (w / 2f - neighborCardWidth / 2f) : cardWidth;
         incomingArriveDistanceCache = incomingArriveDistance; //cache for commitDrag(), which has no layout info of its own
-        //single-card layout only: the incoming card, drawn after (so on top of) the current
-        //card below instead of inline here - it's edge-to-edge with the current card the whole
-        //drag (no peek slot to grow out of, see drawDisplacedNeighbor call sites below), so
-        //drawing it first would tuck it behind the current card's opaque body for that entire
-        //stretch and only reveal it - popping to the front - at the instant finishCommit() makes
-        //it the new currentCard.
-        CardView incomingSingleCard = null;
-        float incomingSingleCardX = 0f;
         //the replaced card only exists as a drag candidate; its whole exit is driven live by
         //the finger, so once a commit has happened it's already off-screen and isn't drawn
-        //(the incoming card, now currentCard, takes over the center on its own)
+        //(the incoming card, now currentCard, takes over the center on its own). Note
+        //outgoingSettle only becomes true for a *fling* (incrementCard() swaps the model
+        //immediately and settles slideOffset from a full card-width back to 0), never for a
+        //released drag past the reveal threshold - commitDrag() keeps it false and instead
+        //defers the swap until the settle animation itself finishes, so this whole block (and
+        //therefore the incoming/materializing card below) keeps rendering, using the
+        //still-valid pre-swap prevCard/nextCard, all the way through that settle.
+        CardView materializingCard = null;
+        float materializeCenterX = 0f, materializeW = 0f, materializeH = 0f, materializeAlpha = 0f;
+        CardView incomingSingleCard = null;
+        float incomingSingleCardX = 0f;
         if (!outgoingSettle) {
             if (slideOffset > 0) {
                 //incoming: was waiting just off to the left, slides in and grows to take over center
@@ -593,11 +595,27 @@ public class CardZoom extends FOverlay {
                             drawCenteredNeighbor(g, farPrevCard, gameView, incomingCenterX - incomingArriveDistance, neighborCardWidth, neighborCardHeight);
                         }
                         drawCenteredNeighbor(g, prevCard, gameView, incomingCenterX, incomingW, incomingH);
+                        //the incoming card above is drawn underneath the still-shrinking
+                        //current card (centerDraw, drawn later below) - fine early in the drag,
+                        //where it should look like it's peeking out from behind, but left as-is
+                        //all the way to commit it means the incoming card is never on top until
+                        //the literal instant finishCommit() promotes it to currentCard, reading
+                        //as a hard pop. So queue a second, independent copy to be drawn later, on
+                        //top of centerDraw, fully transparent until the gesture passes its
+                        //halfway point and then fading to opaque - by convergeDistance it already
+                        //matches what finishCommit() is about to make permanent, so there's
+                        //nothing left to pop into place.
+                        materializingCard = prevCard;
+                        materializeCenterX = incomingCenterX;
+                        materializeW = incomingW;
+                        materializeH = incomingH;
+                        materializeAlpha = Math.max(0f, Math.min(1f, (progress - 0.5f) / 0.5f));
                     } else {
                         //single-card layout: incoming card is already full size, always exactly
                         //one cardWidth behind the current card's own live x, so the two stay
                         //edge-to-edge with no scaling and no separate peek slot behind it
-                        //(drawn below, after the current card, so it stays on top the whole drag)
+                        //(drawn below, after the current card, so it stays on top the whole
+                        //drag - no z-order fix needed here, unlike the two-card layout above)
                         incomingSingleCard = prevCard;
                         incomingSingleCardX = x - cardWidth;
                     }
@@ -620,6 +638,11 @@ public class CardZoom extends FOverlay {
                             drawCenteredNeighbor(g, farNextCard, gameView, incomingCenterX + incomingArriveDistance, neighborCardWidth, neighborCardHeight);
                         }
                         drawCenteredNeighbor(g, nextCard, gameView, incomingCenterX, incomingW, incomingH);
+                        materializingCard = nextCard;
+                        materializeCenterX = incomingCenterX;
+                        materializeW = incomingW;
+                        materializeH = incomingH;
+                        materializeAlpha = Math.max(0f, Math.min(1f, (progress - 0.5f) / 0.5f));
                     } else {
                         //(drawn below, after the current card, so it stays on top the whole drag)
                         incomingSingleCard = nextCard;
@@ -661,6 +684,9 @@ public class CardZoom extends FOverlay {
             if (currentCard != null)
                 CardImageRenderer.drawDetails(g, currentCard, gameView, showBackSide ? showBackSide : showAltState, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight);
         }
+        if (materializingCard != null && materializeAlpha > 0f) {
+            drawCenteredNeighbor(g, materializingCard, gameView, materializeCenterX, materializeW, materializeH, materializeAlpha);
+        }
         if (incomingSingleCard != null) {
             drawDisplacedNeighbor(g, incomingSingleCard, gameView, incomingSingleCardX, cardWidth, cardHeight);
         }
@@ -701,12 +727,26 @@ public class CardZoom extends FOverlay {
     //derived directly from the incoming card's own live centerX, so the two are always a
     //fixed distance apart and can never overlap or cross)
     private void drawCenteredNeighbor(Graphics g, CardView card, GameView gameView, float centerX, float width, float height) {
+        drawCenteredNeighbor(g, card, gameView, centerX, width, height, 1f);
+    }
+
+    //alpha variant used to crossfade the two-card layout's materializing card on top of the
+    //still-shrinking current card during the second half of the gesture (see materializingCard
+    //in drawOverlay)
+    private void drawCenteredNeighbor(Graphics g, CardView card, GameView gameView, float centerX, float width, float height, float alpha) {
         float drawX = centerX - width / 2f;
         float drawY = (getHeight() - height) / 2f;
+        float oldAlpha = g.getfloatAlphaComposite();
+        if (alpha != 1f) {
+            g.setAlphaComposite(oldAlpha * alpha);
+        }
         if (zoomMode) {
             CardImageRenderer.drawZoom(g, card, gameView, false, drawX, drawY, width, height, getWidth(), getHeight(), false);
         } else {
             CardImageRenderer.drawDetails(g, card, gameView, false, drawX, drawY, width, height);
+        }
+        if (alpha != 1f) {
+            g.setAlphaComposite(oldAlpha);
         }
     }
 
