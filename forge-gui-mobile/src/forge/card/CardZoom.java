@@ -6,11 +6,13 @@ import java.util.Map.Entry;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
+import com.badlogic.gdx.math.Interpolation;
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.utils.Align;
 
 import forge.Forge;
 import forge.Graphics;
+import forge.animation.ForgeAnimation;
 import forge.assets.FSkinFont;
 import forge.assets.FSkinImage;
 import forge.deck.ArchetypeDeckGenerator;
@@ -44,6 +46,7 @@ public class CardZoom extends FOverlay {
     private static List<?> items;
     private static int currentIndex, initialIndex;
     private static CardView currentCard, prevCard, nextCard;
+    private static CardView farPrevCard, farNextCard; //one further back than prevCard/nextCard; fills the peek slot the incoming neighbor vacates
     private static boolean zoomMode = true;
     private static boolean oneCardView = prefs.getPrefBoolean(FPref.UI_SINGLE_CARD_ZOOM);
     private float totalZoomAmount;
@@ -55,6 +58,13 @@ public class CardZoom extends FOverlay {
     private static boolean showAltState;
     private static boolean showBackSide = false;
     private static boolean showMerged = false;
+    private static float slideOffset = 0f;
+    private static SlideAnimation activeSlideAnimation;
+    private static boolean dragged; //true once pan() fires for the current gesture
+    private static boolean outgoingSettle; //true while the neighbor slot is the just-replaced card settling off-screen, false while it's a live drag candidate
+    private static float slideDistance; //cached from the last layout; unit of travel for the slide/scale transition
+    private static float neighborCardWidthCache; //cached from the last layout; >0 means the two-card layout is active
+    private static float incomingArriveDistanceCache; //cached from the last layout; distance commitDrag() animates slideOffset out to before flipping roles (see incomingArriveDistance below)
 
     public static void show(Object item) {
         show(item, false);
@@ -82,6 +92,12 @@ public class CardZoom extends FOverlay {
         prevCard = currentIndex > 0 ? getCardView(items.get(currentIndex - 1)) : null;
         nextCard = currentIndex < items.size() - 1 ? getCardView(items.get(currentIndex + 1)) : null;
         onCardChanged();
+        if (activeSlideAnimation != null) {
+            activeSlideAnimation.stop();
+        }
+        slideOffset = 0f;
+        dragged = false;
+        outgoingSettle = false;
         cardZoom.show();
     }
 
@@ -144,27 +160,125 @@ public class CardZoom extends FOverlay {
 
     private static void incrementCard(int dir) {
         if (dir > 0) {
-            if (currentIndex == items.size() - 1) {
-                return;
-            }
-            currentIndex++;
+            if (currentIndex == items.size() - 1) { return; }
+        } else {
+            if (currentIndex == 0) { return; }
+        }
+        swapCurrentCard(dir);
+        onCardChanged();
+        startSlideAnimation(dir);
+    }
 
+    //moves currentIndex by dir and rotates prevCard/currentCard/nextCard accordingly; caller
+    //bounds-checks dir against currentIndex first
+    private static void swapCurrentCard(int dir) {
+        if (dir > 0) {
+            currentIndex++;
             prevCard = currentCard;
             currentCard = nextCard;
             nextCard = currentIndex < items.size() - 1 ? getCardView(items.get(currentIndex + 1)) : null;
-        }
-        else {
-            if (currentIndex == 0) { return; }
+        } else {
             currentIndex--;
-
             nextCard = currentCard;
             currentCard = prevCard;
             prevCard = currentIndex > 0 ? getCardView(items.get(currentIndex - 1)) : null;
         }
+    }
+
+    private static void startSlideAnimation(int dir) {
+        if (!Forge.isLandscapeMode()) { return; } //portrait keeps the original instant-swap, no-animation behavior
+        float distance = slideDistance;
+        if (distance <= 0) { return; } //overlay not laid out yet
+
+        outgoingSettle = true;
+        settleTo(dir > 0 ? distance : -distance);
+    }
+
+    private static void settleTo(float offset) {
+        if (activeSlideAnimation != null) {
+            activeSlideAnimation.stop();
+        }
+        if (offset == 0) {
+            slideOffset = 0;
+            return;
+        }
+        activeSlideAnimation = new SlideAnimation(offset, 0, null);
+        activeSlideAnimation.start();
+    }
+
+    //commit a drag past the reveal threshold; the index/role swap is deferred until the settle
+    //animation reaches convergeDistance (see below), so nothing jumps at the moment of release
+    private static void commitDrag(int dir) {
+        if (activeSlideAnimation != null) {
+            activeSlideAnimation.stop();
+        }
+        outgoingSettle = false;
+        //convergeDistance is whichever is farther: neighborCardWidthCache (where the displaced
+        //card finishes exiting) or incomingArriveDistanceCache (where incoming/current/trailing
+        //finish arriving, see incomingArriveDistance in drawOverlay) - a height-clamped neighbor
+        //can make neighborCardWidthCache alone shorter than incomingArriveDistanceCache, which
+        //would otherwise leave the main cards mid-grow when finishCommit() snaps them straight
+        //to their arrived rest state, reading as a stutter
+        float convergeDistance = Math.max(neighborCardWidthCache, incomingArriveDistanceCache);
+        if (Math.abs(slideOffset) >= convergeDistance) {
+            //already past convergence (e.g. dragged/flung to the edge); finish immediately
+            //instead of animating backward toward convergeDistance
+            finishCommit(dir);
+            return;
+        }
+        //continue in whichever direction slideOffset was already moving (not necessarily dir's
+        //sign - dragging right increases slideOffset but decrements currentIndex, dir=-1)
+        float endOffset = slideOffset > 0 ? convergeDistance : -convergeDistance;
+        activeSlideAnimation = new SlideAnimation(slideOffset, endOffset, () -> finishCommit(dir));
+        activeSlideAnimation.start();
+    }
+
+    private static void finishCommit(int dir) {
+        swapCurrentCard(dir);
         onCardChanged();
+        slideOffset = 0;
+    }
+
+    private static class SlideAnimation extends ForgeAnimation {
+        private static final float DURATION = 0.3f;
+
+        private final float startOffset;
+        private final float endOffset;
+        private final Runnable onComplete; //run only if this animation reaches endOffset naturally, not if interrupted
+        private float elapsed;
+        private boolean finishedNaturally;
+
+        private SlideAnimation(float startOffset, float endOffset, Runnable onComplete) {
+            this.startOffset = startOffset;
+            this.endOffset = endOffset;
+            this.onComplete = onComplete;
+            slideOffset = startOffset;
+        }
+
+        @Override
+        protected boolean advance(float dt) {
+            elapsed += dt;
+            if (elapsed >= DURATION) {
+                slideOffset = endOffset;
+                finishedNaturally = true;
+                return false;
+            }
+            slideOffset = endOffset + (startOffset - endOffset) * (1 - Interpolation.pow2Out.apply(elapsed / DURATION));
+            return true;
+        }
+
+        @Override
+        protected void onEnd(boolean endingAll) {
+            activeSlideAnimation = null;
+            if (finishedNaturally && onComplete != null) {
+                onComplete.run();
+            }
+        }
     }
 
     private static void onCardChanged() {
+        farPrevCard = currentIndex > 1 ? getCardView(items.get(currentIndex - 2)) : null;
+        farNextCard = currentIndex < items.size() - 2 ? getCardView(items.get(currentIndex + 2)) : null;
         mutateIconBounds = null;
         if (activateHandler != null) {
             currentActivateAction = activateHandler.getActivateAction(currentIndex);
@@ -249,6 +363,12 @@ public class CardZoom extends FOverlay {
     @Override
     public boolean fling(float velocityX, float velocityY) {
         if (Math.abs(velocityX) > Math.abs(velocityY)) {
+            if (dragged) {
+                //already handled by pan()/panStop() as this gesture played out; avoid a
+                //double navigation from a fast-but-short drag also exceeding the fling threshold
+                dragged = false;
+                return true;
+            }
             incrementCard(velocityX > 0 ? -1 : 1);
             showBackSide = false;
             showAltState = false;
@@ -268,6 +388,46 @@ public class CardZoom extends FOverlay {
             return true;
         }
         return false;
+    }
+
+    @Override
+    public boolean pan(float x, float y, float deltaX, float deltaY, boolean moreVertical) {
+        if (!Forge.isLandscapeMode()) { return true; } //portrait keeps the original static, drag-less behavior
+        dragged = true;
+        outgoingSettle = false; //finger back in control; neighbor is a fresh drag candidate again
+        if (moreVertical || items == null) {
+            return true;
+        }
+        //block only pushing further past the boundary, not correcting back toward center
+        if (deltaX > 0 && prevCard == null && slideOffset >= 0) { return true; }
+        if (deltaX < 0 && nextCard == null && slideOffset <= 0) { return true; }
+
+        if (activeSlideAnimation != null) {
+            activeSlideAnimation.stop();
+        }
+        slideOffset += deltaX;
+        float distance = slideDistance;
+        if (distance > 0) { //only one neighbor is ever drawn, so don't drag past it
+            slideOffset = Math.max(-distance, Math.min(distance, slideOffset));
+        }
+        return true;
+    }
+
+    @Override
+    public boolean panStop(float x, float y) {
+        if (!Forge.isLandscapeMode()) { return true; } //portrait keeps the original static, drag-less behavior
+        if (slideOffset == 0 || items == null) {
+            return true;
+        }
+        float threshold = slideDistance * 0.125f;
+        if (slideOffset > threshold && prevCard != null) {
+            commitDrag(-1);
+        } else if (slideOffset < -threshold && nextCard != null) {
+            commitDrag(1);
+        } else {
+            settleTo(0);
+        }
+        return true;
     }
 
     private void setOneCardView(boolean oneCardView0) {
@@ -302,6 +462,15 @@ public class CardZoom extends FOverlay {
 
     @Override
     public void drawOverlay(Graphics g) {
+        if (!Forge.isLandscapeMode() && slideOffset != 0) {
+            //covers rotating out of landscape mid-drag/mid-animation; without this a stray frame
+            //would render the landscape-only carousel positioning before pan()/panStop() can reset it
+            if (activeSlideAnimation != null) {
+                activeSlideAnimation.stop();
+            }
+            slideOffset = 0;
+            outgoingSettle = false;
+        }
         final GameView gameView = MatchController.instance.getGameView();
 
         float w = getWidth();
@@ -325,6 +494,9 @@ public class CardZoom extends FOverlay {
         float maxCardHeight = h - AspectRatioMultiplier * messageHeight; //maxheight of currently zoomed card
 
         float cardWidth, cardHeight, y;
+        //size the displaced card rests at before a drag starts; captured so it can render
+        //unscaled at that exact size for its whole exit
+        float neighborCardWidth = 0f, neighborCardHeight = 0f;
 
         if (oneCardView && !Forge.isLandscapeMode()) {
             cardWidth = w;
@@ -347,12 +519,16 @@ public class CardZoom extends FOverlay {
                 cardHeight = maxSideCardHeight;
                 cardWidth = cardHeight / FCardPanel.ASPECT_RATIO;
             }
+            neighborCardWidth = cardWidth;
+            neighborCardHeight = cardHeight;
             y = (h - cardHeight) / 2;
-            if (prevCard != null) {
-                CardImageRenderer.drawZoom(g, prevCard, gameView, false, 0, y, cardWidth, cardHeight, getWidth(), getHeight(), false);
-            }
-            if (nextCard != null) {
-                CardImageRenderer.drawZoom(g, nextCard, gameView, false, w - cardWidth, y, cardWidth, cardHeight, getWidth(), getHeight(), false);
+            if (slideOffset == 0) { //once dragging starts, these are replaced by the animated versions below
+                if (prevCard != null) {
+                    CardImageRenderer.drawZoom(g, prevCard, gameView, false, 0, y, cardWidth, cardHeight, getWidth(), getHeight(), false);
+                }
+                if (nextCard != null) {
+                    CardImageRenderer.drawZoom(g, nextCard, gameView, false, w - cardWidth, y, cardWidth, cardHeight, getWidth(), getHeight(), false);
+                }
             }
 
             cardWidth = w * 0.7f;
@@ -363,14 +539,92 @@ public class CardZoom extends FOverlay {
             cardHeight = maxCardHeight;
             cardWidth = cardHeight / FCardPanel.ASPECT_RATIO;
         }
-        float x = (w - cardWidth) / 2;
+        //cache for pan()/panStop(), which have no layout info of their own; a full card-width
+        //made the transition feel cramped/rushed, so the whole gesture spans two card-widths
+        slideDistance = cardWidth * 2f;
+        neighborCardWidthCache = neighborCardWidth; //cache for commitDrag(), which has no layout info of its own
+        float x = (w - cardWidth) / 2 + slideOffset;
         y = (h - cardHeight) / 2;
+        //how far the incoming card's center must travel from its resting position to the screen
+        //center; used so its size finishes growing exactly when it arrives (size is tied to the
+        //whole 2-cardWidth gesture, but position reaches center after just 1 cardWidth)
+        float incomingArriveDistance = w / 2f - neighborCardWidth / 2f;
+        incomingArriveDistanceCache = incomingArriveDistance; //cache for commitDrag(), which has no layout info of its own
+        //the replaced card only exists as a drag candidate; once committed it's already
+        //off-screen and isn't drawn here (the incoming card, now currentCard, takes over the
+        //center on its own)
+        CardView materializingCard = null;
+        float materializeCenterX = 0f, materializeW = 0f, materializeH = 0f, materializeAlpha = 0f;
+        if (!outgoingSettle) {
+            if (slideOffset > 0) {
+                //incoming: was waiting just off to the left, slides in and grows to take over center
+                if (prevCard != null) {
+                    float progress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, slideOffset / incomingArriveDistance)) : 0f;
+                    float incomingCenterX = neighborCardWidth / 2f + (w / 2f - neighborCardWidth / 2f) * progress;
+                    float incomingW = neighborCardWidth + (cardWidth - neighborCardWidth) * progress;
+                    float incomingH = neighborCardHeight + (cardHeight - neighborCardHeight) * progress;
+                    //trailing: tied to the incoming card's own live coordinate, always
+                    //incomingArriveDistance behind it, so it can't overlap or cross it and
+                    //arrives at the vacated peek slot exactly when incoming arrives at center.
+                    //Drawn first (underneath) since it's newly appearing from nothing.
+                    if (farPrevCard != null) {
+                        drawCenteredNeighbor(g, farPrevCard, gameView, incomingCenterX - incomingArriveDistance, neighborCardWidth, neighborCardHeight);
+                    }
+                    drawCenteredNeighbor(g, prevCard, gameView, incomingCenterX, incomingW, incomingH);
+                    //queue a second, fading-in copy of the incoming card, drawn later on top of
+                    //centerDraw below - otherwise it stays visibly tucked behind the
+                    //still-shrinking current card until finishCommit() promotes it, popping into place
+                    materializingCard = prevCard;
+                    materializeCenterX = incomingCenterX;
+                    materializeW = incomingW;
+                    materializeH = incomingH;
+                    materializeAlpha = Math.max(0f, Math.min(1f, (progress - 0.5f) / 0.5f));
+                }
+                //displaced: was resting just off to the right, gets pushed further out of view
+                //at a constant size, never scaling
+                if (nextCard != null) {
+                    drawDisplacedNeighbor(g, nextCard, gameView, w - neighborCardWidth + slideOffset, neighborCardWidth, neighborCardHeight);
+                }
+            } else if (slideOffset < 0) {
+                if (nextCard != null) {
+                    float progress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, -slideOffset / incomingArriveDistance)) : 0f;
+                    float incomingCenterX = w - neighborCardWidth / 2f - (w / 2f - neighborCardWidth / 2f) * progress;
+                    float incomingW = neighborCardWidth + (cardWidth - neighborCardWidth) * progress;
+                    float incomingH = neighborCardHeight + (cardHeight - neighborCardHeight) * progress;
+                    if (farNextCard != null) {
+                        drawCenteredNeighbor(g, farNextCard, gameView, incomingCenterX + incomingArriveDistance, neighborCardWidth, neighborCardHeight);
+                    }
+                    drawCenteredNeighbor(g, nextCard, gameView, incomingCenterX, incomingW, incomingH);
+                    materializingCard = nextCard;
+                    materializeCenterX = incomingCenterX;
+                    materializeW = incomingW;
+                    materializeH = incomingH;
+                    materializeAlpha = Math.max(0f, Math.min(1f, (progress - 0.5f) / 0.5f));
+                }
+                if (prevCard != null) {
+                    drawDisplacedNeighbor(g, prevCard, gameView, slideOffset, neighborCardWidth, neighborCardHeight);
+                }
+            }
+        }
+        //shrinks from full center size/position toward the exact peek size/position it will
+        //occupy once the drag/commit completes, so the post-commit hand-off in
+        //finishCommit()/commitDrag() is seamless instead of jumping
+        float leaveProgress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, Math.abs(slideOffset) / incomingArriveDistance)) : 0f;
+        float futureRestCenterX = slideOffset > 0 ? w - neighborCardWidth / 2f : neighborCardWidth / 2f;
+        float centerDrawWidth = cardWidth + (neighborCardWidth - cardWidth) * leaveProgress;
+        float centerDrawHeight = cardHeight + (neighborCardHeight - cardHeight) * leaveProgress;
+        float centerX = w / 2f + (futureRestCenterX - w / 2f) * leaveProgress;
+        float centerDrawX = centerX - centerDrawWidth / 2f;
+        float centerDrawY = (h - centerDrawHeight) / 2f;
         if (zoomMode) {
             if (currentCard != null)
-                CardImageRenderer.drawZoom(g, currentCard, gameView, showBackSide? showBackSide : showAltState, x, y, cardWidth, cardHeight, getWidth(), getHeight(), true);
+                CardImageRenderer.drawZoom(g, currentCard, gameView, showBackSide? showBackSide : showAltState, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight, getWidth(), getHeight(), true);
         } else {
             if (currentCard != null)
-                CardImageRenderer.drawDetails(g, currentCard, gameView, showBackSide ? showBackSide : showAltState, x, y, cardWidth, cardHeight);
+                CardImageRenderer.drawDetails(g, currentCard, gameView, showBackSide ? showBackSide : showAltState, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight);
+        }
+        if (materializingCard != null && materializeAlpha > 0f) {
+            drawCenteredNeighbor(g, materializingCard, gameView, materializeCenterX, materializeW, materializeH, materializeAlpha);
         }
 
         if (!showMerged) {
@@ -402,6 +656,44 @@ public class CardZoom extends FOverlay {
             specialize.setBounds(w/2 - specialize.getAutoSizeBounds().width/2, h - specialize.getAutoSizeBounds().height - messageHeight, specialize.getAutoSizeBounds().width, specialize.getAutoSizeBounds().height);
         }
         interrupt(false);
+    }
+
+    //draws a neighbor at a fixed size, centered at centerX; used for the incoming card (whose
+    //live centerX/size are computed by the caller) and the trailing card (whose centerX is
+    //derived from the incoming card's own live centerX)
+    private void drawCenteredNeighbor(Graphics g, CardView card, GameView gameView, float centerX, float width, float height) {
+        drawCenteredNeighbor(g, card, gameView, centerX, width, height, 1f);
+    }
+
+    //alpha variant used to crossfade the materializing card on top of the still-shrinking
+    //current card during the second half of the gesture (see materializingCard above)
+    private void drawCenteredNeighbor(Graphics g, CardView card, GameView gameView, float centerX, float width, float height, float alpha) {
+        float drawX = centerX - width / 2f;
+        float drawY = (getHeight() - height) / 2f;
+        float oldAlpha = g.getfloatAlphaComposite();
+        if (alpha != 1f) {
+            g.setAlphaComposite(oldAlpha * alpha);
+        }
+        if (zoomMode) {
+            CardImageRenderer.drawZoom(g, card, gameView, false, drawX, drawY, width, height, getWidth(), getHeight(), false);
+        } else {
+            CardImageRenderer.drawDetails(g, card, gameView, false, drawX, drawY, width, height);
+        }
+        if (alpha != 1f) {
+            g.setAlphaComposite(oldAlpha);
+        }
+    }
+
+    //draws the displaced neighbor at a fixed size (its resting/peek size) for the entire drag,
+    //only translating it horizontally - unlike the incoming/current cards, it must never resize
+    //while leaving
+    private void drawDisplacedNeighbor(Graphics g, CardView card, GameView gameView, float x, float cardWidth, float cardHeight) {
+        float y = (getHeight() - cardHeight) / 2;
+        if (zoomMode) {
+            CardImageRenderer.drawZoom(g, card, gameView, false, x, y, cardWidth, cardHeight, getWidth(), getHeight(), false);
+        } else {
+            CardImageRenderer.drawDetails(g, card, gameView, false, x, y, cardWidth, cardHeight);
+        }
     }
 
     private void drawIconBounds(Graphics g, Rectangle iconBounds, FSkinImage skinImage, float x, float y, float cardWidth, float cardHeight) {
