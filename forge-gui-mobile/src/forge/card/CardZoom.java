@@ -186,7 +186,6 @@ public class CardZoom extends FOverlay {
     }
 
     private static void startSlideAnimation(int dir) {
-        if (!Forge.isLandscapeMode()) { return; } //portrait keeps the original instant-swap, no-animation behavior
         float distance = slideDistance;
         if (distance <= 0) { return; } //overlay not laid out yet
 
@@ -218,7 +217,8 @@ public class CardZoom extends FOverlay {
         //finish arriving, see incomingArriveDistance in drawOverlay) - a height-clamped neighbor
         //can make neighborCardWidthCache alone shorter than incomingArriveDistanceCache, which
         //would otherwise leave the main cards mid-grow when finishCommit() snaps them straight
-        //to their arrived rest state, reading as a stutter
+        //to their arrived rest state, reading as a stutter. In the single-card layout
+        //neighborCardWidthCache is always 0, so this reduces to just incomingArriveDistanceCache.
         float convergeDistance = Math.max(neighborCardWidthCache, incomingArriveDistanceCache);
         if (Math.abs(slideOffset) >= convergeDistance) {
             //already past convergence (e.g. dragged/flung to the edge); finish immediately
@@ -392,7 +392,6 @@ public class CardZoom extends FOverlay {
 
     @Override
     public boolean pan(float x, float y, float deltaX, float deltaY, boolean moreVertical) {
-        if (!Forge.isLandscapeMode()) { return true; } //portrait keeps the original static, drag-less behavior
         dragged = true;
         outgoingSettle = false; //finger back in control; neighbor is a fresh drag candidate again
         if (moreVertical || items == null) {
@@ -415,7 +414,6 @@ public class CardZoom extends FOverlay {
 
     @Override
     public boolean panStop(float x, float y) {
-        if (!Forge.isLandscapeMode()) { return true; } //portrait keeps the original static, drag-less behavior
         if (slideOffset == 0 || items == null) {
             return true;
         }
@@ -462,15 +460,6 @@ public class CardZoom extends FOverlay {
 
     @Override
     public void drawOverlay(Graphics g) {
-        if (!Forge.isLandscapeMode() && slideOffset != 0) {
-            //covers rotating out of landscape mid-drag/mid-animation; without this a stray frame
-            //would render the landscape-only carousel positioning before pan()/panStop() can reset it
-            if (activeSlideAnimation != null) {
-                activeSlideAnimation.stop();
-            }
-            slideOffset = 0;
-            outgoingSettle = false;
-        }
         final GameView gameView = MatchController.instance.getGameView();
 
         float w = getWidth();
@@ -497,6 +486,7 @@ public class CardZoom extends FOverlay {
         //size the displaced card rests at before a drag starts; captured so it can render
         //unscaled at that exact size for its whole exit
         float neighborCardWidth = 0f, neighborCardHeight = 0f;
+        boolean twoCardLayout = !(oneCardView && !Forge.isLandscapeMode());
 
         if (oneCardView && !Forge.isLandscapeMode()) {
             cardWidth = w;
@@ -539,83 +529,116 @@ public class CardZoom extends FOverlay {
             cardHeight = maxCardHeight;
             cardWidth = cardHeight / FCardPanel.ASPECT_RATIO;
         }
-        //cache for pan()/panStop(), which have no layout info of their own; a full card-width
-        //made the transition feel cramped/rushed, so the whole gesture spans two card-widths
-        slideDistance = cardWidth * 2f;
+        //cache for pan()/panStop(), which have no layout info of their own.
+        //two-card layout: a full card-width made the transition feel cramped/rushed, so the
+        //whole gesture spans two card-widths instead.
+        //single-card layout: the incoming card is already full width (see incomingArriveDistance
+        //below), so one card-width of drag is already the whole hand-off.
+        slideDistance = twoCardLayout ? cardWidth * 2f : cardWidth;
         neighborCardWidthCache = neighborCardWidth; //cache for commitDrag(), which has no layout info of its own
         float x = (w - cardWidth) / 2 + slideOffset;
         y = (h - cardHeight) / 2;
-        //how far the incoming card's center must travel from its resting position to the screen
-        //center; used so its size finishes growing exactly when it arrives (size is tied to the
-        //whole 2-cardWidth gesture, but position reaches center after just 1 cardWidth)
-        float incomingArriveDistance = w / 2f - neighborCardWidth / 2f;
+        //two-card layout: how far the incoming card's center must travel from its resting
+        //position to the screen center; used so its size finishes growing exactly when it
+        //arrives (size is tied to the whole 2-cardWidth gesture, but position reaches center
+        //after just 1 cardWidth).
+        //single-card layout: nothing peeks at rest, so the incoming card is already full size
+        //the instant it's visible - it just translates in over one cardWidth of travel.
+        float incomingArriveDistance = twoCardLayout ? (w / 2f - neighborCardWidth / 2f) : cardWidth;
         incomingArriveDistanceCache = incomingArriveDistance; //cache for commitDrag(), which has no layout info of its own
         //the replaced card only exists as a drag candidate; once committed it's already
         //off-screen and isn't drawn here (the incoming card, now currentCard, takes over the
         //center on its own)
         CardView materializingCard = null;
         float materializeCenterX = 0f, materializeW = 0f, materializeH = 0f, materializeAlpha = 0f;
+        CardView incomingSingleCard = null;
+        float incomingSingleCardX = 0f;
         if (!outgoingSettle) {
             if (slideOffset > 0) {
                 //incoming: was waiting just off to the left, slides in and grows to take over center
                 if (prevCard != null) {
-                    float progress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, slideOffset / incomingArriveDistance)) : 0f;
-                    float incomingCenterX = neighborCardWidth / 2f + (w / 2f - neighborCardWidth / 2f) * progress;
-                    float incomingW = neighborCardWidth + (cardWidth - neighborCardWidth) * progress;
-                    float incomingH = neighborCardHeight + (cardHeight - neighborCardHeight) * progress;
-                    //trailing: tied to the incoming card's own live coordinate, always
-                    //incomingArriveDistance behind it, so it can't overlap or cross it and
-                    //arrives at the vacated peek slot exactly when incoming arrives at center.
-                    //Drawn first (underneath) since it's newly appearing from nothing.
-                    if (farPrevCard != null) {
-                        drawCenteredNeighbor(g, farPrevCard, gameView, incomingCenterX - incomingArriveDistance, neighborCardWidth, neighborCardHeight);
+                    if (twoCardLayout) {
+                        float progress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, slideOffset / incomingArriveDistance)) : 0f;
+                        float incomingCenterX = neighborCardWidth / 2f + (w / 2f - neighborCardWidth / 2f) * progress;
+                        float incomingW = neighborCardWidth + (cardWidth - neighborCardWidth) * progress;
+                        float incomingH = neighborCardHeight + (cardHeight - neighborCardHeight) * progress;
+                        //trailing: tied to the incoming card's own live coordinate, always
+                        //incomingArriveDistance behind it, so it can't overlap or cross it and
+                        //arrives at the vacated peek slot exactly when incoming arrives at
+                        //center. Drawn first (underneath) since it's newly appearing from nothing.
+                        if (farPrevCard != null) {
+                            drawCenteredNeighbor(g, farPrevCard, gameView, incomingCenterX - incomingArriveDistance, neighborCardWidth, neighborCardHeight);
+                        }
+                        drawCenteredNeighbor(g, prevCard, gameView, incomingCenterX, incomingW, incomingH);
+                        //queue a second, fading-in copy of the incoming card, drawn later on top
+                        //of centerDraw below - otherwise it stays visibly tucked behind the
+                        //still-shrinking current card until finishCommit() promotes it, popping into place
+                        materializingCard = prevCard;
+                        materializeCenterX = incomingCenterX;
+                        materializeW = incomingW;
+                        materializeH = incomingH;
+                        materializeAlpha = Math.max(0f, Math.min(1f, (progress - 0.5f) / 0.5f));
+                    } else {
+                        //single-card layout: incoming card is already full size, always exactly
+                        //one cardWidth behind the current card's own live x, edge-to-edge with no
+                        //scaling (drawn below, after the current card, so it stays on top the
+                        //whole drag - no z-order fix needed here, unlike the two-card layout above)
+                        incomingSingleCard = prevCard;
+                        incomingSingleCardX = x - cardWidth;
                     }
-                    drawCenteredNeighbor(g, prevCard, gameView, incomingCenterX, incomingW, incomingH);
-                    //queue a second, fading-in copy of the incoming card, drawn later on top of
-                    //centerDraw below - otherwise it stays visibly tucked behind the
-                    //still-shrinking current card until finishCommit() promotes it, popping into place
-                    materializingCard = prevCard;
-                    materializeCenterX = incomingCenterX;
-                    materializeW = incomingW;
-                    materializeH = incomingH;
-                    materializeAlpha = Math.max(0f, Math.min(1f, (progress - 0.5f) / 0.5f));
                 }
-                //displaced: was resting just off to the right, gets pushed further out of view
-                //at a constant size, never scaling
-                if (nextCard != null) {
+                //two-card layout: the displaced card was resting just off to the right and gets
+                //pushed further out of view at a constant size, never scaling. Single-card
+                //layout has nothing resting there to begin with, so nothing to draw.
+                if (nextCard != null && twoCardLayout) {
                     drawDisplacedNeighbor(g, nextCard, gameView, w - neighborCardWidth + slideOffset, neighborCardWidth, neighborCardHeight);
                 }
             } else if (slideOffset < 0) {
                 if (nextCard != null) {
-                    float progress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, -slideOffset / incomingArriveDistance)) : 0f;
-                    float incomingCenterX = w - neighborCardWidth / 2f - (w / 2f - neighborCardWidth / 2f) * progress;
-                    float incomingW = neighborCardWidth + (cardWidth - neighborCardWidth) * progress;
-                    float incomingH = neighborCardHeight + (cardHeight - neighborCardHeight) * progress;
-                    if (farNextCard != null) {
-                        drawCenteredNeighbor(g, farNextCard, gameView, incomingCenterX + incomingArriveDistance, neighborCardWidth, neighborCardHeight);
+                    if (twoCardLayout) {
+                        float progress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, -slideOffset / incomingArriveDistance)) : 0f;
+                        float incomingCenterX = w - neighborCardWidth / 2f - (w / 2f - neighborCardWidth / 2f) * progress;
+                        float incomingW = neighborCardWidth + (cardWidth - neighborCardWidth) * progress;
+                        float incomingH = neighborCardHeight + (cardHeight - neighborCardHeight) * progress;
+                        if (farNextCard != null) {
+                            drawCenteredNeighbor(g, farNextCard, gameView, incomingCenterX + incomingArriveDistance, neighborCardWidth, neighborCardHeight);
+                        }
+                        drawCenteredNeighbor(g, nextCard, gameView, incomingCenterX, incomingW, incomingH);
+                        materializingCard = nextCard;
+                        materializeCenterX = incomingCenterX;
+                        materializeW = incomingW;
+                        materializeH = incomingH;
+                        materializeAlpha = Math.max(0f, Math.min(1f, (progress - 0.5f) / 0.5f));
+                    } else {
+                        incomingSingleCard = nextCard;
+                        incomingSingleCardX = x + cardWidth;
                     }
-                    drawCenteredNeighbor(g, nextCard, gameView, incomingCenterX, incomingW, incomingH);
-                    materializingCard = nextCard;
-                    materializeCenterX = incomingCenterX;
-                    materializeW = incomingW;
-                    materializeH = incomingH;
-                    materializeAlpha = Math.max(0f, Math.min(1f, (progress - 0.5f) / 0.5f));
                 }
-                if (prevCard != null) {
+                if (prevCard != null && twoCardLayout) {
                     drawDisplacedNeighbor(g, prevCard, gameView, slideOffset, neighborCardWidth, neighborCardHeight);
                 }
             }
         }
-        //shrinks from full center size/position toward the exact peek size/position it will
-        //occupy once the drag/commit completes, so the post-commit hand-off in
-        //finishCommit()/commitDrag() is seamless instead of jumping
-        float leaveProgress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, Math.abs(slideOffset) / incomingArriveDistance)) : 0f;
-        float futureRestCenterX = slideOffset > 0 ? w - neighborCardWidth / 2f : neighborCardWidth / 2f;
-        float centerDrawWidth = cardWidth + (neighborCardWidth - cardWidth) * leaveProgress;
-        float centerDrawHeight = cardHeight + (neighborCardHeight - cardHeight) * leaveProgress;
-        float centerX = w / 2f + (futureRestCenterX - w / 2f) * leaveProgress;
-        float centerDrawX = centerX - centerDrawWidth / 2f;
-        float centerDrawY = (h - centerDrawHeight) / 2f;
+        float centerDrawWidth, centerDrawHeight, centerDrawX, centerDrawY;
+        if (twoCardLayout) {
+            //shrinks from full center size/position toward the exact peek size/position it will
+            //occupy once the drag/commit completes, so the post-commit hand-off in
+            //finishCommit()/commitDrag() is seamless instead of jumping
+            float leaveProgress = incomingArriveDistance > 0 ? Math.max(0f, Math.min(1f, Math.abs(slideOffset) / incomingArriveDistance)) : 0f;
+            float futureRestCenterX = slideOffset > 0 ? w - neighborCardWidth / 2f : neighborCardWidth / 2f;
+            centerDrawWidth = cardWidth + (neighborCardWidth - cardWidth) * leaveProgress;
+            centerDrawHeight = cardHeight + (neighborCardHeight - cardHeight) * leaveProgress;
+            float centerX = w / 2f + (futureRestCenterX - w / 2f) * leaveProgress;
+            centerDrawX = centerX - centerDrawWidth / 2f;
+            centerDrawY = (h - centerDrawHeight) / 2f;
+        } else {
+            //single-card layout: pure translation, no scaling - the card just slides off screen
+            //at constant size in whichever direction the drag is going
+            centerDrawWidth = cardWidth;
+            centerDrawHeight = cardHeight;
+            centerDrawX = x;
+            centerDrawY = y;
+        }
         if (zoomMode) {
             if (currentCard != null)
                 CardImageRenderer.drawZoom(g, currentCard, gameView, showBackSide? showBackSide : showAltState, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight, getWidth(), getHeight(), true);
@@ -625,6 +648,9 @@ public class CardZoom extends FOverlay {
         }
         if (materializingCard != null && materializeAlpha > 0f) {
             drawCenteredNeighbor(g, materializingCard, gameView, materializeCenterX, materializeW, materializeH, materializeAlpha);
+        }
+        if (incomingSingleCard != null) {
+            drawDisplacedNeighbor(g, incomingSingleCard, gameView, incomingSingleCardX, cardWidth, cardHeight);
         }
 
         if (!showMerged) {
