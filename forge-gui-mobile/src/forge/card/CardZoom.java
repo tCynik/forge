@@ -43,6 +43,7 @@ public class CardZoom extends FOverlay {
     private static final float VERTICAL_DRAG_MIN_SCALE = 0.35f; //how small the card shrinks at full swipe-up-to-play commit
     private static final float VERTICAL_COMMIT_THRESHOLD = 0.3f; //fraction of verticalDragDistance a release must clear to play the card instead of springing back
     private static final float VERTICAL_DRAG_SENSITIVITY = 0.5f; //fraction of raw finger deltaY the swipe-up-to-play drag responds with
+    private static final float VIEW_FLIP_COMMIT_THRESHOLD = 0.3f; //fraction of viewFlipDistance a release must clear to flip the view instead of springing back
 
     private static final CardZoom cardZoom = new CardZoom();
     private static final ForgePreferences prefs = FModel.getPreferences();
@@ -73,6 +74,9 @@ public class CardZoom extends FOverlay {
     private static float verticalDragDistance; //cached from the last layout; scale-progress reference for the swipe-up-to-play gesture (see drawOverlay)
     private static float verticalDragTravelDistance; //cached from the last layout; half of verticalDragDistance - where the shrink finishes, capping travel so it doesn't outrun the shrink
     private static boolean verticalPanStopHandled; //true for the one fling() call after a panStop() that already committed/settled a live vertical drag this gesture
+    private static float viewFlipOffset = 0f; //>=0 while a swipe-down page-flip drag or its commit/settle animation is live; 0 = rest
+    private static ViewFlipAnimation activeViewFlipAnimation;
+    private static float viewFlipDistance; //cached from the last layout; drag distance to fully commit the picture/detail flip
 
     public static void show(Object item) {
         show(item, false);
@@ -111,6 +115,10 @@ public class CardZoom extends FOverlay {
         }
         verticalDragOffset = 0f;
         verticalPanStopHandled = false;
+        if (activeViewFlipAnimation != null) {
+            activeViewFlipAnimation.stop();
+        }
+        viewFlipOffset = 0f;
         cardZoom.show();
     }
 
@@ -359,6 +367,73 @@ public class CardZoom extends FOverlay {
         }
     }
 
+    private static void settleViewFlipTo(float offset) {
+        if (activeViewFlipAnimation != null) {
+            activeViewFlipAnimation.stop();
+        }
+        if (offset == viewFlipOffset) {
+            return;
+        }
+        activeViewFlipAnimation = new ViewFlipAnimation(viewFlipOffset, offset, null);
+        activeViewFlipAnimation.start();
+    }
+
+    //continues the swipe-down page-flip gesture past release to a full reveal before actually
+    //toggling zoomMode, so a released drag finishes the same page-turn visual a full manual
+    //drag through the whole card height would have
+    private static void commitViewFlip() {
+        if (activeViewFlipAnimation != null) {
+            activeViewFlipAnimation.stop();
+        }
+        activeViewFlipAnimation = new ViewFlipAnimation(viewFlipOffset, viewFlipDistance, CardZoom::finishViewFlip);
+        activeViewFlipAnimation.start();
+    }
+
+    private static void finishViewFlip() {
+        viewFlipOffset = 0f;
+        zoomMode = !zoomMode;
+        showBackSide = false;
+        showAltState = false;
+    }
+
+    //mirrors VerticalDragAnimation, but drives viewFlipOffset for the swipe-down picture/detail flip
+    private static class ViewFlipAnimation extends ForgeAnimation {
+        private static final float DURATION = 0.2f;
+
+        private final float startOffset;
+        private final float endOffset;
+        private final Runnable onComplete; //run only if this animation reaches endOffset naturally, not if interrupted
+        private float elapsed;
+        private boolean finishedNaturally;
+
+        private ViewFlipAnimation(float startOffset, float endOffset, Runnable onComplete) {
+            this.startOffset = startOffset;
+            this.endOffset = endOffset;
+            this.onComplete = onComplete;
+            viewFlipOffset = startOffset;
+        }
+
+        @Override
+        protected boolean advance(float dt) {
+            elapsed += dt;
+            if (elapsed >= DURATION) {
+                viewFlipOffset = endOffset;
+                finishedNaturally = true;
+                return false;
+            }
+            viewFlipOffset = endOffset + (startOffset - endOffset) * (1 - Interpolation.pow2Out.apply(elapsed / DURATION));
+            return true;
+        }
+
+        @Override
+        protected void onEnd(boolean endingAll) {
+            activeViewFlipAnimation = null;
+            if (finishedNaturally && onComplete != null) {
+                onComplete.run();
+            }
+        }
+    }
+
     private static void onCardChanged() {
         farPrevCard = currentIndex > 1 ? getCardView(items.get(currentIndex - 2)) : null;
         farNextCard = currentIndex < items.size() - 2 ? getCardView(items.get(currentIndex + 2)) : null;
@@ -463,9 +538,10 @@ public class CardZoom extends FOverlay {
             return true;
         }
         if (velocityY > 0) {
-            zoomMode = !zoomMode;
-            showBackSide = false;
-            showAltState = false;
+            //no drag happened this gesture (verticalPanStopHandled would have caught that case
+            //above) - a quick flick with little travel; still play the page-turn animation from
+            //scratch rather than cutting straight to the other view
+            commitViewFlip();
             return true;
         }
         if (currentActivateAction != null && activateHandler != null) {
@@ -484,10 +560,12 @@ public class CardZoom extends FOverlay {
         }
         if (moreVertical) {
             boolean canPlay = currentActivateAction != null && activateHandler != null;
-            //sticky direction: once a live offset is non-zero, keep driving it (so reversing
-            //mid-drag cancels it); a fresh gesture picks up from this call's deltaY, but only
-            //when there's actually a card to play
-            if (canPlay && (verticalDragOffset < 0f || deltaY < 0f)) {
+            //sticky direction: once a live offset is non-zero, keep driving that same one (so
+            //reversing mid-drag cancels it instead of jumping to the other gesture); a fresh
+            //gesture (both offsets at 0) picks a direction from this call's deltaY, favoring
+            //swipe-up-to-play only when there's actually a card to play
+            boolean draggingUp = verticalDragOffset < 0f || (viewFlipOffset == 0f && deltaY < 0f && canPlay);
+            if (draggingUp) {
                 if (activeVerticalDragAnimation != null) {
                     activeVerticalDragAnimation.stop();
                 }
@@ -497,6 +575,17 @@ public class CardZoom extends FOverlay {
                 } else if (verticalDragTravelDistance > 0f && verticalDragOffset < -verticalDragTravelDistance) {
                     verticalDragOffset = -verticalDragTravelDistance;
                 }
+                return true;
+            }
+            //swipe-down page-flip: always available, regardless of whether the card can be played
+            if (activeViewFlipAnimation != null) {
+                activeViewFlipAnimation.stop();
+            }
+            viewFlipOffset += deltaY;
+            if (viewFlipOffset < 0f) {
+                viewFlipOffset = 0f;
+            } else if (viewFlipDistance > 0f && viewFlipOffset > viewFlipDistance) {
+                viewFlipOffset = viewFlipDistance;
             }
             return true;
         }
@@ -524,6 +613,16 @@ public class CardZoom extends FOverlay {
                 commitVerticalDrag();
             } else {
                 settleVerticalTo(0f);
+            }
+            return true;
+        }
+        if (viewFlipOffset != 0f) {
+            verticalPanStopHandled = true;
+            float progress = viewFlipDistance > 0f ? viewFlipOffset / viewFlipDistance : 0f;
+            if (progress >= VIEW_FLIP_COMMIT_THRESHOLD) {
+                commitViewFlip();
+            } else {
+                settleViewFlipTo(0f);
             }
             return true;
         }
@@ -663,6 +762,7 @@ public class CardZoom extends FOverlay {
         //bar even at full shrink - it should read as falling onto the table, not flying off-screen
         verticalDragDistance = Math.max(0f, h / 2f - (cardHeight * VERTICAL_DRAG_MIN_SCALE) / 2f - messageHeight);
         verticalDragTravelDistance = verticalDragDistance / 2f;
+        viewFlipDistance = cardHeight; //cache for pan()/panStop(); a full card-height drag completes the picture/detail flip
         //the replaced card only exists as a drag candidate; once committed it's already
         //off-screen and isn't drawn here (the incoming card, now currentCard, takes over the
         //center on its own)
@@ -770,12 +870,21 @@ public class CardZoom extends FOverlay {
             centerDrawX = centerX - centerDrawWidth / 2f;
             centerDrawY = centerY - centerDrawHeight / 2f;
         }
-        if (zoomMode) {
-            if (currentCard != null)
-                CardImageRenderer.drawZoom(g, currentCard, gameView, showBackSide? showBackSide : showAltState, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight, getWidth(), getHeight(), true);
-        } else {
-            if (currentCard != null)
-                CardImageRenderer.drawDetails(g, currentCard, gameView, showBackSide ? showBackSide : showAltState, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight);
+        if (currentCard != null && viewFlipOffset != 0f) {
+            //swipe-down page-flip: draw the current view in full underneath, then the opposite
+            //view on top clipped to a region growing down from the top edge - like a page
+            //peeling away to reveal the one underneath
+            drawCardView(g, currentCard, gameView, zoomMode, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight);
+            float revealHeight = centerDrawHeight * (viewFlipDistance > 0f ? Math.min(1f, viewFlipOffset / viewFlipDistance) : 0f);
+            if (revealHeight > 0f && g.startClip(centerDrawX, centerDrawY, centerDrawWidth, revealHeight)) {
+                try {
+                    drawCardView(g, currentCard, gameView, !zoomMode, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight);
+                } finally {
+                    g.endClip();
+                }
+            }
+        } else if (currentCard != null) {
+            drawCardView(g, currentCard, gameView, zoomMode, centerDrawX, centerDrawY, centerDrawWidth, centerDrawHeight);
         }
         if (materializingCard != null && materializeAlpha > 0f) {
             drawCenteredNeighbor(g, materializingCard, gameView, materializeCenterX, materializeW, materializeH, materializeAlpha);
@@ -813,6 +922,16 @@ public class CardZoom extends FOverlay {
             specialize.setBounds(w/2 - specialize.getAutoSizeBounds().width/2, h - specialize.getAutoSizeBounds().height - messageHeight, specialize.getAutoSizeBounds().width, specialize.getAutoSizeBounds().height);
         }
         interrupt(false);
+    }
+
+    //draws currentCard in picture (zoom) or detail mode at the given rect; shared by the normal
+    //draw and both layers of the swipe-down page-flip reveal
+    private void drawCardView(Graphics g, CardView card, GameView gameView, boolean picture, float x, float y, float width, float height) {
+        if (picture) {
+            CardImageRenderer.drawZoom(g, card, gameView, showBackSide ? showBackSide : showAltState, x, y, width, height, getWidth(), getHeight(), true);
+        } else {
+            CardImageRenderer.drawDetails(g, card, gameView, showBackSide ? showBackSide : showAltState, x, y, width, height);
+        }
     }
 
     //draws a neighbor at a fixed size, centered at centerX; used for the incoming card (whose
