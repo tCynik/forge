@@ -1,0 +1,3 @@
+# Per-machine state and real save-game backups -- never shared, not even on this sync branch.
+.device-state.json
+backups/
