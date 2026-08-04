@@ -144,7 +144,33 @@ if (-not $NoBackup) {
         $backupPath = Join-Path $backupRoot "$targetSerial\$stamp"
         New-Item -ItemType Directory -Force -Path $backupPath | Out-Null
         Write-Host "Backing up game progress ($dataDir) to $backupPath ..."
-        adb -s $targetSerial pull $dataDir $backupPath | Out-Null
+        Backup-ProgressFolder -Serial $targetSerial -AssetsDir $assetsDir -BackupPath $backupPath
+
+        # A backup containing only log files despite the device reporting real progress data almost
+        # always means adb couldn't actually read the app's files (Permission denied under scoped
+        # storage -- see Backup-ProgressFolder) -- NOT that progress is genuinely empty. Confirmed for
+        # real on 2026-08-04: a save created moments before a deploy was wiped by the reinstall below
+        # because this exact silent failure went unchecked. This is a hard OS sandboxing limit, not
+        # something a debuggable build/run-as fixes (confirmed the same day: run-as still gets
+        # Permission denied on Android/obb/<pkg> even on a debuggable build, since it runs outside the
+        # zygote-launched process that would normally get that per-app storage mount) -- so there is no
+        # "rebuild and it'll work" option here. Refuse to proceed rather than deploy over real progress
+        # with no usable backup.
+        if (-not (Test-BackupLooksComplete $backupPath)) {
+            Write-Warning "Backup at $backupPath has no recognizable progress data (only log files, or nothing), even though the device reported a progress folder."
+            if (-not $Force) {
+                Write-Error @"
+Stopping before install/uninstall -- proceeding could wipe real progress with no usable backup.
+This is a scoped-storage permission wall (confirmed: neither plain adb pull nor run-as can read
+Android/obb/forge.app/Forge/data on this device) -- there's no rebuild/flag that fixes it. Options:
+  - Back up manually: on the device, use a file manager with Storage Access Framework support
+    (e.g. Files) to open/copy '$dataDir' somewhere safe, then re-run with -Force.
+  - If you're sure there's nothing worth keeping on this device, re-run with -Force.
+"@
+                exit 1
+            }
+            Write-Host "-Force given -- proceeding anyway despite an incomplete-looking backup."
+        }
 
         # Guard against deploying over a device whose progress was *already* wiped by something
         # else moments ago (in practice: another dev machine deploying to the same physical device

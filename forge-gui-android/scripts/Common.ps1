@@ -90,6 +90,65 @@ function Get-DeviceAssetsDir($serial) {
     }
 }
 
+function Test-RunAsAvailable($serial) {
+    $out = adb -s $serial shell "run-as $script:ForgePackage id" 2>&1
+    return ($LASTEXITCODE -eq 0) -and ($out -match '^uid=')
+}
+
+function Backup-ProgressFolder {
+    # Plain `adb pull` runs as the unprivileged 'shell' user. Under scoped storage that user can only
+    # read files that happen to be world-readable (e.g. leftovers from a previous restore's chmod 777)
+    # -- any file the app wrote normally (its own default perms) comes back "Permission denied", and
+    # `adb pull`'s own exit code does NOT reflect this per-file failure. Confirmed for real on
+    # 2026-08-04: a save created moments before a deploy silently vanished from the "backup" because
+    # pull only managed to grab forge.log.
+    #
+    # `run-as` executes as the app's own uid, which sidesteps the permission wall for INTERNAL storage
+    # (/data/data/<pkg>) -- but does NOT help here. Confirmed for real on 2026-08-04, on a debuggable
+    # build: `run-as forge.app ls .../Android/obb/forge.app` still gets "Permission denied". run-as
+    # spawns its process outside zygote, so it never gets the per-app FUSE mount that grants a real app
+    # process access to its own Android/obb or Android/data sandbox under scoped storage -- being
+    # debuggable only makes run-as available at all, it doesn't grant it that mount. Attempted anyway
+    # (harmless, and it may still help on API<=29 devices, where Get-DeviceAssetsDir returns a plain
+    # /storage/emulated/0/Forge path outside the obb sandbox) with a plain-pull fallback either way --
+    # caller must still verify the result with Test-BackupLooksComplete before trusting it.
+    param([Parameter(Mandatory)][string]$Serial, [Parameter(Mandatory)][string]$AssetsDir, [Parameter(Mandatory)][string]$BackupPath)
+
+    if (Test-RunAsAvailable $Serial) {
+        Write-Host "Trying backup via 'run-as $script:ForgePackage' (debuggable build available)..."
+        $tarPath = Join-Path $BackupPath "data.tar"
+        # exec-out (not shell) to avoid adb shell's stdout CRLF-mangling on a binary tar stream.
+        $psi = [System.Diagnostics.ProcessStartInfo]::new("adb")
+        foreach ($a in @("-s", $Serial, "exec-out", "run-as", $script:ForgePackage, "tar", "-cf", "-", "-C", $AssetsDir, "data")) { $psi.ArgumentList.Add($a) }
+        $psi.RedirectStandardOutput = $true
+        $psi.UseShellExecute = $false
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $stdout = $proc.StandardOutput.BaseStream
+        $file = [System.IO.File]::Create($tarPath)
+        $stdout.CopyTo($file)
+        $file.Close()
+        $proc.WaitForExit()
+        if ($proc.ExitCode -eq 0 -and (Test-Path $tarPath) -and (Get-Item $tarPath).Length -gt 0) {
+            tar -xf $tarPath -C $BackupPath
+            Remove-Item $tarPath -Force -ErrorAction SilentlyContinue
+            return
+        }
+        Write-Warning "run-as backup failed or produced an empty tar (exit $($proc.ExitCode)) -- falling back to plain adb pull, which may miss files the shell user can't read."
+        Remove-Item $tarPath -Force -ErrorAction SilentlyContinue
+    }
+    adb -s $Serial pull "$AssetsDir/data" $BackupPath | Out-Null
+}
+
+function Test-BackupLooksComplete($backupPath) {
+    # A backup that contains nothing but log files is almost always a silent Permission-denied
+    # failure (see Backup-ProgressFolder), not genuinely-empty progress -- treat it as untrustworthy.
+    $dataPath = Join-Path $backupPath "data"
+    if (-not (Test-Path $dataPath)) { return $false }
+    $realContent = Get-ChildItem $dataPath -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '^forge(\.\d{8}-\d{6})?\.log$' }
+    return $realContent.Count -gt 0
+}
+
 function Register-SubstDrive {
     # android-maven-plugin's d8 goal shells out via "cmd.exe /X /C <one giant command>" with a
     # --classpath entry per dependency jar. Forge has ~90 dependencies, so under deep paths
