@@ -149,9 +149,11 @@ uninstall+reinstall скрипт печатает предупреждение �
 
 ## 3.5. Надёжность бэкапа прогресса — важное ограничение, не баг
 
-`android-test-build` теперь собирает APK с `android:debuggable="true"`
-(`pom.xml`, execution `set-debuggable`) — это дало рабочий `adb shell run-as
-forge.app` для **внутреннего** хранилища приложения (`/data/data/forge.app`).
+Эксперимент 2026-08-04: временно (см. раздел 9 — это НЕ постоянное изменение,
+в `pom.xml` на рабочих ветках/master его быть не должно) добавили в
+`android-test-build` execution `set-debuggable`, дающий
+`android:debuggable="true"` — это дало рабочий `adb shell run-as forge.app`
+для **внутреннего** хранилища приложения (`/data/data/forge.app`).
 
 **Это НЕ чинит бэкап папки прогресса.** Проверено вживую 2026-08-04:
 ```
@@ -188,6 +190,41 @@ storage), не решается ни правкой скрипта, ни ман�
 вредит, иногда может сработать на других путях/версиях Android — например на
 Android ≤10, где `Get-DeviceAssetsDir` возвращает путь вне obb-песочницы), но
 не полагайся на это как на единственную защиту.
+
+### Если всё же нужно повторить debuggable-эксперимент (session-local, см. раздел 9)
+
+Не решает проблему бэкапа (см. выше), но может пригодиться для другой
+диагностики (JDWP-дебаг, `run-as` для internal storage). В `pom.xml`, в
+профиле `android-test-build`, у execution с `<goal>manifest-merger</goal>`
+(id `update-manifest`) сразу после него добавить ещё один `<execution>` того
+же плагина `android-maven-plugin`:
+
+```xml
+<execution>
+    <id>set-debuggable</id>
+    <goals>
+        <goal>manifest-update</goal>
+    </goals>
+    <configuration>
+        <androidManifestFile>${project.build.directory}/AndroidManifest.xml</androidManifestFile>
+        <destinationManifestFile>${project.build.directory}/AndroidManifest.xml</destinationManifestFile>
+        <manifest>
+            <debuggable>true</debuggable>
+            <!-- Обязательно вложено сюда, не отдельным элементом конфигурации -- иначе
+            no-op для этого goal, и версия пересчитается по умолчанию из
+            android.manifest.versionCodeUpdateFromVersion=true (глобальное свойство
+            pom.xml), что даёт INSTALL_FAILED_VERSION_DOWNGRADE против уже
+            установленной сборки. Подтверждено на практике 2026-08-04. -->
+            <versionCodeUpdateFromVersion>false</versionCodeUpdateFromVersion>
+        </manifest>
+    </configuration>
+</execution>
+```
+
+Работает только на `androidManifestFile`/`destinationManifestFile`, указанных
+на уже смерженный `target/AndroidManifest.xml` — не на исходный
+`src/main/AndroidManifest.xml` (иначе правит закоммиченный файл на диске).
+После сессии — раздел 9, шаг 4 (откатить, снять `skip-worktree`).
 
 ## 4. Устройство: USB-отладка
 
@@ -277,14 +314,59 @@ powershell -File forge-gui-android/scripts/Push-LocalRes.ps1
 - **Устройство Android ≤10 (API ≤29)** — известное ограничение доступа к
   хранилищу, подробности в `CLAUDE.md`. Тестировать на Android 11+.
 
-## 9. Где что лежит
+## 9. Временные (session-local) изменения кода — никогда не должны попасть в прод
+
+Иногда для одной рабочей сессии (отладка, эксперимент, разовая диагностика)
+нужно временно поменять что-то в обычном коде проекта — `pom.xml`,
+версию/versionCode, флаг в манифесте и т.п. — то, что живёт **не** в
+`forge-gui-android/scripts/` и потому не попадает под механизм веток
+`tooling-sync`. Пример из практики (2026-08-04): временный
+`android:debuggable=true` в `pom.xml` для проверки, поможет ли `run-as`
+бэкапу прогресса (не помогло — см. раздел 3.5 — но сама процедура
+"внести-поработать-откатить" понадобится ещё).
+
+**Порядок действий:**
+
+1. **Вносим временное изменение** (правим `pom.xml` или что нужно).
+2. **Сразу прячем его от git**, пока не забыли:
+   ```powershell
+   git update-index --skip-worktree forge-gui-android/pom.xml
+   ```
+   С этого момента `git status`, `git diff`, `git add -A`, `git commit -a` —
+   **не видят** этот файл вообще, как будто изменений нет. Это надёжнее, чем
+   "просто не забыть не закоммитить": человеческая память подводит, флаг —
+   нет. Файл при этом на диске остаётся изменённым — сборка видит правку.
+3. **Работаем в сессии как обычно.** Промежуточные коммиты делаем
+   как всегда — `git add <конкретные файлы>` — временный файл в них
+   физически не попадёт, даже случайным `git add -A`, пока флаг стоит.
+4. **По окончании работы — снимаем флаг и откатываем:**
+   ```powershell
+   git update-index --no-skip-worktree forge-gui-android/pom.xml
+   git checkout -- forge-gui-android/pom.xml
+   ```
+   Проверить `git status` — файл должен быть чистым (не в diff, не untracked).
+
+**Важные оговорки:**
+
+- `--skip-worktree` — свойство **этой конкретной рабочей копии** (не
+  синхронизируется через git, не пушится, не видна на второй машине). На
+  каждой машине, где повторяется такая сессия, флаг ставится заново.
+- Пока флаг стоит, `git pull`/`merge`/`checkout <другая ветка>`, которые по
+  идее должны обновить этот файл, могут промолчать и **не обновить его** —
+  git считает файл "как будто не изменился, трогать не буду". Если в проекте
+  реально что-то поменяли в `pom.xml` пока у тебя стоит `skip-worktree` — снять
+  флаг *до* pull/merge/checkout, иначе получишь рассинхрон с историей молча.
+- Список файлов с флагом сейчас: `git ls-files -v | grep '^S'` (заглавная `S`
+  = skip-worktree).
+- Если нужно быстро повторить именно debuggable-эксперимент из раздела 3.5 —
+  сам XML-блок для `pom.xml` (профиль `android-test-build`, execution
+  `set-debuggable`) описан там же; скопировать оттуда, а не переизобретать.
+
+## 10. Где что лежит
 
 - `Common.ps1` — общие функции (устройство, JDK/Maven, subst-диски, закреплённый keystore).
 - `Build-Deploy.ps1` — сборка + установка + операторские сообщения при рассинхроне ключа.
 - `Push-LocalRes.ps1` — только `res/`.
 - `.gitignore` (в этой папке, на этой ветке) — исключает `backups/` и `.device-state.json`.
 - `%USERPROFILE%\.forge-android-build\debug.keystore` — подписывающий ключ, вне репозитория, переносится вручную (раздел 3).
-- `forge-gui-android/pom.xml` (**рабочие ветки/master, не `tooling-sync`**) — профиль `android-test-build`,
-  execution `set-debuggable` включает `android:debuggable=true` для локальных сборок (раздел 3.5).
-  Обычный код проекта, синхронизируется как часть репозитория, не через этот механизм.
 - `CLAUDE.md` (корень репозитория, все ветки) — подробное обоснование каждого решения.
